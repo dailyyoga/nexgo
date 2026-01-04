@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/dailyyoga/nexgo/logger"
 	"github.com/robfig/cron/v3"
-	"github.com/dailyyoga/go-kit/logger"
 	"go.uber.org/zap"
 )
 

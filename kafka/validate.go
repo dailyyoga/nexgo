@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/dailyyoga/go-kit/logger"
+	"github.com/dailyyoga/nexgo/logger"
 	"go.uber.org/zap"
 )
 

@@ -1,4 +1,4 @@
-# go-kit
+# nexgo
 
 A collection of Go utility packages for common infrastructure patterns.
 
@@ -87,7 +87,7 @@ Periodically syncing cache with automatic retry logic and exponential backoff.
 ## Installation
 
 ```bash
-go get github.com/dailyyoga/go-kit
+go get github.com/dailyyoga/nexgo
 ```
 
 ## Quick Start
@@ -96,7 +96,7 @@ go get github.com/dailyyoga/go-kit
 
 **Default configuration:**
 ```go
-import "github.com/dailyyoga/go-kit/logger"
+import "github.com/dailyyoga/nexgo/logger"
 
 // Use default configuration (info level, JSON encoding, stdout)
 log, _ := logger.New(nil)
@@ -107,7 +107,7 @@ log.Info("application started")
 
 **Custom configuration:**
 ```go
-import "github.com/dailyyoga/go-kit/logger"
+import "github.com/dailyyoga/nexgo/logger"
 
 cfg := &logger.Config{
     Level:            "debug",
@@ -124,8 +124,8 @@ defer log.Sync()
 **Basic Usage:**
 ```go
 import (
-    "github.com/dailyyoga/go-kit/db"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/db"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -173,8 +173,8 @@ if err := database.Ping(ctx); err != nil {
 
 ```go
 import (
-    "github.com/dailyyoga/go-kit/ch"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/ch"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -191,8 +191,8 @@ writer.Write(ctx, events)
 **Consumer:**
 ```go
 import (
-    "github.com/dailyyoga/go-kit/kafka"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/kafka"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -208,8 +208,8 @@ consumer.Start(ctx, func(ctx context.Context, msg *kafka.Message) error {
 **Producer:**
 ```go
 import (
-    "github.com/dailyyoga/go-kit/kafka"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/kafka"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -227,8 +227,8 @@ producer.Produce(ctx, &kafka.Message{
 
 ```go
 import (
-    "github.com/dailyyoga/go-kit/cron"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/cron"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -243,8 +243,8 @@ defer manager.Close()
 **Using Runner (track and wait):**
 ```go
 import (
-    "github.com/dailyyoga/go-kit/routine"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/routine"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -264,8 +264,8 @@ runner.Wait() // Wait for all goroutines to complete
 **Standalone functions (fire-and-forget):**
 ```go
 import (
-    "github.com/dailyyoga/go-kit/routine"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/routine"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -285,8 +285,8 @@ routine.GoNamed(log, "background-task", func() {
 
 ```go
 import (
-    "github.com/dailyyoga/go-kit/cache"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/cache"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)

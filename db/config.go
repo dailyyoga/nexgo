@@ -91,7 +91,9 @@ func (c *Config) Validate() error {
 	if !slices.ContainsFunc(validLogLevels, func(level string) bool {
 		return strings.EqualFold(c.LogLevel, level)
 	}) {
-		return ErrInvalidConfig(fmt.Sprintf("log_level %q must be one of: %s", c.LogLevel, strings.Join(validLogLevels, ", ")))
+		errMsg := fmt.Sprintf("log_level %q must be one of: %s",
+			c.LogLevel, strings.Join(validLogLevels, ", "))
+		return ErrInvalidConfig(errMsg)
 	}
 	return nil
 }

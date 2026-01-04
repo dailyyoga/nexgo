@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/dailyyoga/go-kit/logger"
+	"github.com/dailyyoga/nexgo/logger"
 )
 
 type defaultConsumer struct {

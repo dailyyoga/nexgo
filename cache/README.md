@@ -16,7 +16,7 @@ A generic Go cache library with periodic synchronization, automatic retry logic,
 ## Installation
 
 ```bash
-go get github.com/dailyyoga/go-kit/cache
+go get github.com/dailyyoga/nexgo/cache
 ```
 
 ## Quick Start
@@ -31,8 +31,8 @@ import (
     "log"
     "time"
 
-    "github.com/dailyyoga/go-kit/cache"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/cache"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 type User struct {

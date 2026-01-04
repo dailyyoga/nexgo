@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/dailyyoga/go-kit/logger"
+	"github.com/dailyyoga/nexgo/logger"
 	"go.uber.org/zap"
 	glogger "gorm.io/gorm/logger"
 )

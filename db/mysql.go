@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/dailyyoga/go-kit/logger"
+	"github.com/dailyyoga/nexgo/logger"
 	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"

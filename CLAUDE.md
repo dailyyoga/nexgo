@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a Go toolkit library (`github.com/dailyyoga/go-kit`) providing seven core packages for common infrastructure patterns:
+This is a Go toolkit library (`github.com/dailyyoga/nexgo`) providing seven core packages for common infrastructure patterns:
 
 - **logger** - Unified logging interface based on zap with configurable levels, encoding, and output
 - **db** - MySQL database client wrapper with connection pool management, structured logging, and slow query detection
@@ -105,7 +105,7 @@ log, err := logger.New(cfg)
 
 **Usage** (Two Ways):
 ```go
-import "github.com/dailyyoga/go-kit/logger"
+import "github.com/dailyyoga/nexgo/logger"
 
 func main() {
     // Create logger - automatically sets global logger
@@ -195,8 +195,8 @@ database, err := db.NewMySQL(log, cfg)
 **Usage**:
 ```go
 import (
-    "github.com/dailyyoga/go-kit/db"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/db"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 // Create logger
@@ -418,7 +418,7 @@ This prevents frequent small batch writes during low traffic periods while ensur
 
 **Usage** (Runner):
 ```go
-import "github.com/dailyyoga/go-kit/routine"
+import "github.com/dailyyoga/nexgo/routine"
 
 runner := routine.New(log)
 
@@ -506,7 +506,7 @@ cache, err := cache.NewSyncableCache(log, cfg, syncFunc)
 
 **Usage**:
 ```go
-import "github.com/dailyyoga/go-kit/cache"
+import "github.com/dailyyoga/nexgo/cache"
 
 // Define sync function to fetch data
 syncFunc := func(ctx context.Context) ([]User, error) {
@@ -556,7 +556,7 @@ if err := c.Sync(ctx); err != nil {
 The logger package provides a unified `Logger` interface used across all packages:
 
 ```go
-// From github.com/dailyyoga/go-kit/logger
+// From github.com/dailyyoga/nexgo/logger
 type Logger interface {
     Debug(msg string, fields ...zap.Field)
     Info(msg string, fields ...zap.Field)
@@ -575,7 +575,7 @@ type Logger interface {
 
 **Usage Pattern**:
 ```go
-import "github.com/dailyyoga/go-kit/logger"
+import "github.com/dailyyoga/nexgo/logger"
 
 // Create logger - also sets global logger automatically
 log, err := logger.New(nil) // Uses default config

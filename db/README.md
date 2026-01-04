@@ -15,7 +15,7 @@ A MySQL database client wrapper built on GORM with connection pool management, s
 ## Installation
 
 ```bash
-go get github.com/dailyyoga/go-kit/db
+go get github.com/dailyyoga/nexgo/db
 ```
 
 ## Quick Start
@@ -29,8 +29,8 @@ import (
     "context"
     "log"
 
-    "github.com/dailyyoga/go-kit/db"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/db"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 type User struct {

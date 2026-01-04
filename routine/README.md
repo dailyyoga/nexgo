@@ -14,7 +14,7 @@ Safe goroutine execution with automatic panic recovery to prevent application cr
 ## Installation
 
 ```bash
-go get github.com/dailyyoga/go-kit/routine
+go get github.com/dailyyoga/nexgo/routine
 ```
 
 ## Why Use This Package?
@@ -50,8 +50,8 @@ import (
     "context"
     "fmt"
 
-    "github.com/dailyyoga/go-kit/logger"
-    "github.com/dailyyoga/go-kit/routine"
+    "github.com/dailyyoga/nexgo/logger"
+    "github.com/dailyyoga/nexgo/routine"
 )
 
 func main() {
@@ -83,8 +83,8 @@ Use standalone functions for simple one-off goroutines:
 package main
 
 import (
-    "github.com/dailyyoga/go-kit/logger"
-    "github.com/dailyyoga/go-kit/routine"
+    "github.com/dailyyoga/nexgo/logger"
+    "github.com/dailyyoga/nexgo/routine"
 )
 
 func main() {
@@ -356,7 +356,7 @@ func main() {
 
 ## Dependencies
 
-- [github.com/dailyyoga/go-kit/logger](../logger) - Unified logging interface
+- [github.com/dailyyoga/nexgo/logger](../logger) - Unified logging interface
 
 ## License
 

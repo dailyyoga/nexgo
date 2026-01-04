@@ -1,4 +1,4 @@
-module github.com/dailyyoga/go-kit
+module github.com/dailyyoga/nexgo
 
 go 1.24.6
 

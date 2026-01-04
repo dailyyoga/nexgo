@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/dailyyoga/nexgo/logger"
 	"github.com/smallnest/chanx"
-	"github.com/dailyyoga/go-kit/logger"
 	"go.uber.org/zap"
 )
 

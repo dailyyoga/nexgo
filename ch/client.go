@@ -6,7 +6,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/dailyyoga/go-kit/logger"
+	"github.com/dailyyoga/nexgo/logger"
 	"go.uber.org/zap"
 )
 

@@ -3,7 +3,7 @@ package cron
 import (
 	"context"
 
-	"github.com/dailyyoga/go-kit/logger"
+	"github.com/dailyyoga/nexgo/logger"
 )
 
 // Task is the interface for a cron task

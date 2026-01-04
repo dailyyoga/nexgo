@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dailyyoga/nexgo/logger"
 	"github.com/shopspring/decimal"
-	"github.com/dailyyoga/go-kit/logger"
 	"go.uber.org/zap"
 )
 
@@ -245,6 +245,11 @@ func parseDefaultValueForType(defaultValue string, parsedType ClickhouseType) an
 			return strings.Trim(defaultValue, "'")
 		}
 		return defaultValue
+	case TypeIP:
+		if strings.HasPrefix(defaultValue, "'") && strings.HasSuffix(defaultValue, "'") {
+			return strings.Trim(defaultValue, "'")
+		}
+		return defaultValue
 	case TypeInt:
 		if val, err := strconv.ParseInt(defaultValue, 10, 64); err == nil {
 			return val
@@ -317,7 +322,7 @@ type ValueConverter interface {
 // StringConverter converts values to strings
 type StringConverter struct{}
 
-func (c *StringConverter) Convert(val any, logger logger.Logger) (any, error) {
+func (c *StringConverter) Convert(val any, log logger.Logger) (any, error) {
 	switch v := val.(type) {
 	case string:
 		return v, nil
@@ -383,7 +388,7 @@ func (c *StringConverter) Convert(val any, logger logger.Logger) (any, error) {
 // IntConverter converts values to int64
 type IntConverter struct{}
 
-func (c *IntConverter) Convert(val any, logger logger.Logger) (any, error) {
+func (c *IntConverter) Convert(val any, log logger.Logger) (any, error) {
 	switch v := val.(type) {
 	case int64:
 		return v, nil
@@ -458,8 +463,8 @@ func (c *IntConverter) Convert(val any, logger logger.Logger) (any, error) {
 		if i, err := v.Int64(); err == nil {
 			return i, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to convert json.Number to int64, using zero", zap.String("value", v.String()))
+		if log != nil {
+			log.Warn("failed to convert json.Number to int64, using zero", zap.String("value", v.String()))
 		}
 		return int64(0), nil
 	case float64:
@@ -480,8 +485,8 @@ func (c *IntConverter) Convert(val any, logger logger.Logger) (any, error) {
 		if i, err := strconv.ParseInt(v, 10, 64); err == nil {
 			return i, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to convert string to int64, using zero", zap.String("value", v))
+		if log != nil {
+			log.Warn("failed to convert string to int64, using zero", zap.String("value", v))
 		}
 		return int64(0), nil
 	case *string:
@@ -491,8 +496,8 @@ func (c *IntConverter) Convert(val any, logger logger.Logger) (any, error) {
 		if i, err := strconv.ParseInt(*v, 10, 64); err == nil {
 			return i, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to convert string to int64, using zero", zap.String("value", *v))
+		if log != nil {
+			log.Warn("failed to convert string to int64, using zero", zap.String("value", *v))
 		}
 		return int64(0), nil
 	case bool:
@@ -516,7 +521,7 @@ func (c *IntConverter) Convert(val any, logger logger.Logger) (any, error) {
 // FloatConverter converts values to float64
 type FloatConverter struct{}
 
-func (c *FloatConverter) Convert(val any, logger logger.Logger) (any, error) {
+func (c *FloatConverter) Convert(val any, log logger.Logger) (any, error) {
 	switch v := val.(type) {
 	case float64:
 		return v, nil
@@ -565,16 +570,16 @@ func (c *FloatConverter) Convert(val any, logger logger.Logger) (any, error) {
 		if f, err := v.Float64(); err == nil {
 			return f, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to convert json.Number to float64, using zero", zap.String("value", v.String()))
+		if log != nil {
+			log.Warn("failed to convert json.Number to float64, using zero", zap.String("value", v.String()))
 		}
 		return 0.0, nil
 	case string:
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			return f, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to convert string to float64, using zero", zap.String("value", v))
+		if log != nil {
+			log.Warn("failed to convert string to float64, using zero", zap.String("value", v))
 		}
 		return 0.0, nil
 	case *string:
@@ -584,8 +589,8 @@ func (c *FloatConverter) Convert(val any, logger logger.Logger) (any, error) {
 		if f, err := strconv.ParseFloat(*v, 64); err == nil {
 			return f, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to convert string to float64, using zero", zap.String("value", *v))
+		if log != nil {
+			log.Warn("failed to convert string to float64, using zero", zap.String("value", *v))
 		}
 		return 0.0, nil
 	default:
@@ -596,7 +601,7 @@ func (c *FloatConverter) Convert(val any, logger logger.Logger) (any, error) {
 // DecimalConverter converts values to decimal.Decimal
 type DecimalConverter struct{}
 
-func (c *DecimalConverter) Convert(val any, logger logger.Logger) (any, error) {
+func (c *DecimalConverter) Convert(val any, log logger.Logger) (any, error) {
 	switch v := val.(type) {
 	case decimal.Decimal:
 		return v, nil
@@ -641,28 +646,30 @@ func (c *DecimalConverter) Convert(val any, logger logger.Logger) (any, error) {
 		}
 		return decimal.NewFromInt32(*v), nil
 	case uint64:
-		return decimal.NewFromInt(int64(v)), nil
+		// Use string conversion to avoid potential integer overflow
+		return decimal.NewFromString(strconv.FormatUint(v, 10))
 	case *uint64:
 		if v == nil {
 			return decimal.Zero, nil
 		}
-		return decimal.NewFromInt(int64(*v)), nil
+		// Use string conversion to avoid potential integer overflow
+		return decimal.NewFromString(strconv.FormatUint(*v, 10))
 	case json.Number:
 		// json.Number preserves full precision (used with decoder.UseNumber())
 		// Use string conversion to preserve precision
 		if d, err := decimal.NewFromString(v.String()); err == nil {
 			return d, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to convert json.Number to decimal, using zero", zap.String("value", v.String()))
+		if log != nil {
+			log.Warn("failed to convert json.Number to decimal, using zero", zap.String("value", v.String()))
 		}
 		return decimal.Zero, nil
 	case string:
 		if d, err := decimal.NewFromString(v); err == nil {
 			return d, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to convert string to decimal, using zero", zap.String("value", v))
+		if log != nil {
+			log.Warn("failed to convert string to decimal, using zero", zap.String("value", v))
 		}
 		return decimal.Zero, nil
 	case *string:
@@ -672,8 +679,8 @@ func (c *DecimalConverter) Convert(val any, logger logger.Logger) (any, error) {
 		if d, err := decimal.NewFromString(*v); err == nil {
 			return d, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to convert string to decimal, using zero", zap.String("value", *v))
+		if log != nil {
+			log.Warn("failed to convert string to decimal, using zero", zap.String("value", *v))
 		}
 		return decimal.Zero, nil
 	default:
@@ -684,7 +691,7 @@ func (c *DecimalConverter) Convert(val any, logger logger.Logger) (any, error) {
 // BoolConverter converts values to bool
 type BoolConverter struct{}
 
-func (c *BoolConverter) Convert(val any, logger logger.Logger) (any, error) {
+func (c *BoolConverter) Convert(val any, log logger.Logger) (any, error) {
 	switch v := val.(type) {
 	case bool:
 		return v, nil
@@ -775,7 +782,7 @@ func parseTimeString(s string) (time.Time, bool) {
 // DateTimeConverter converts values to time.Time
 type DateTimeConverter struct{}
 
-func (c *DateTimeConverter) Convert(val any, logger logger.Logger) (any, error) {
+func (c *DateTimeConverter) Convert(val any, log logger.Logger) (any, error) {
 	switch v := val.(type) {
 	case int64:
 		// Assume milliseconds timestamp
@@ -798,8 +805,8 @@ func (c *DateTimeConverter) Convert(val any, logger logger.Logger) (any, error) 
 		if i, err := v.Int64(); err == nil {
 			return time.UnixMilli(i), nil
 		}
-		if logger != nil {
-			logger.Warn("failed to parse json.Number to int64, using clickhouse min time", zap.String("value", v.String()))
+		if log != nil {
+			log.Warn("failed to parse json.Number to int64, using clickhouse min time", zap.String("value", v.String()))
 		}
 		return clickhouseMinTime, nil
 	case float64:
@@ -829,8 +836,8 @@ func (c *DateTimeConverter) Convert(val any, logger logger.Logger) (any, error) 
 		if t, ok := parseTimeString(v); ok {
 			return t, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to parse string to time, using clickhouse min time", zap.String("value", v))
+		if log != nil {
+			log.Warn("failed to parse string to time, using clickhouse min time", zap.String("value", v))
 		}
 		return clickhouseMinTime, nil
 	case *string:
@@ -840,8 +847,8 @@ func (c *DateTimeConverter) Convert(val any, logger logger.Logger) (any, error) 
 		if t, ok := parseTimeString(*v); ok {
 			return t, nil
 		}
-		if logger != nil {
-			logger.Warn("failed to parse string to time, using clickhouse min time", zap.String("value", *v))
+		if log != nil {
+			log.Warn("failed to parse string to time, using clickhouse min time", zap.String("value", *v))
 		}
 		return clickhouseMinTime, nil
 	default:
@@ -854,7 +861,7 @@ type EnumConverter struct {
 	FirstValue string
 }
 
-func (c *EnumConverter) Convert(val any, logger logger.Logger) (any, error) {
+func (c *EnumConverter) Convert(val any, log logger.Logger) (any, error) {
 	// If value is empty string, return first enum value
 	if str, ok := val.(string); ok && str == "" {
 		return c.FirstValue, nil
@@ -865,7 +872,7 @@ func (c *EnumConverter) Convert(val any, logger logger.Logger) (any, error) {
 // IPConverter converts values to net.IP for IPv4/IPv6 columns
 type IPConverter struct{}
 
-func (c *IPConverter) Convert(val any, logger logger.Logger) (any, error) {
+func (c *IPConverter) Convert(val any, log logger.Logger) (any, error) {
 	switch v := val.(type) {
 	case net.IP:
 		if len(v) == 0 {
@@ -883,8 +890,8 @@ func (c *IPConverter) Convert(val any, logger logger.Logger) (any, error) {
 		}
 		ip := net.ParseIP(v)
 		if ip == nil {
-			if logger != nil {
-				logger.Warn("failed to parse string to IP, using zero IP", zap.String("value", v))
+			if log != nil {
+				log.Warn("failed to parse string to IP, using zero IP", zap.String("value", v))
 			}
 			return net.IPv6zero, nil
 		}
@@ -902,7 +909,7 @@ func (c *IPConverter) Convert(val any, logger logger.Logger) (any, error) {
 // DateConverter converts values to time.Time for Date columns
 type DateConverter struct{}
 
-func (c *DateConverter) Convert(val any, logger logger.Logger) (any, error) {
+func (c *DateConverter) Convert(val any, log logger.Logger) (any, error) {
 	switch v := val.(type) {
 	case time.Time:
 		return v, nil
@@ -930,8 +937,8 @@ func (c *DateConverter) Convert(val any, logger logger.Logger) (any, error) {
 		if i, err := v.Int64(); err == nil {
 			return time.Unix(i, 0), nil
 		}
-		if logger != nil {
-			logger.Warn("failed to parse json.Number to date, using clickhouse min time", zap.String("value", v.String()))
+		if log != nil {
+			log.Warn("failed to parse json.Number to date, using clickhouse min time", zap.String("value", v.String()))
 		}
 		return clickhouseMinTime, nil
 	case float64:
@@ -954,8 +961,8 @@ func (c *DateConverter) Convert(val any, logger logger.Logger) (any, error) {
 				return t, nil
 			}
 		}
-		if logger != nil {
-			logger.Warn("failed to parse string to date, using clickhouse min time", zap.String("value", v))
+		if log != nil {
+			log.Warn("failed to parse string to date, using clickhouse min time", zap.String("value", v))
 		}
 		return clickhouseMinTime, nil
 	case *string:
@@ -973,8 +980,8 @@ func (c *DateConverter) Convert(val any, logger logger.Logger) (any, error) {
 				return t, nil
 			}
 		}
-		if logger != nil {
-			logger.Warn("failed to parse string to date, using clickhouse min time", zap.String("value", *v))
+		if log != nil {
+			log.Warn("failed to parse string to date, using clickhouse min time", zap.String("value", *v))
 		}
 		return clickhouseMinTime, nil
 	default:

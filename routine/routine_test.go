@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dailyyoga/go-kit/logger"
+	"github.com/dailyyoga/nexgo/logger"
 )
 
 func newTestLogger(t *testing.T) logger.Logger {

@@ -15,7 +15,7 @@ A unified logging interface based on zap with configurable levels, encoding, and
 ## Installation
 
 ```bash
-go get github.com/dailyyoga/go-kit/logger
+go get github.com/dailyyoga/nexgo/logger
 ```
 
 ## Quick Start
@@ -26,7 +26,7 @@ go get github.com/dailyyoga/go-kit/logger
 package main
 
 import (
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/logger"
     "go.uber.org/zap"
 )
 
@@ -51,7 +51,7 @@ func main() {
 package main
 
 import (
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/logger"
     "go.uber.org/zap"
 )
 
@@ -190,11 +190,11 @@ The Logger interface is used across all go-kit packages:
 
 ```go
 import (
-    "github.com/dailyyoga/go-kit/logger"
-    "github.com/dailyyoga/go-kit/ch"
-    "github.com/dailyyoga/go-kit/kafka"
-    "github.com/dailyyoga/go-kit/cron"
-    "github.com/dailyyoga/go-kit/routine"
+    "github.com/dailyyoga/nexgo/logger"
+    "github.com/dailyyoga/nexgo/ch"
+    "github.com/dailyyoga/nexgo/kafka"
+    "github.com/dailyyoga/nexgo/cron"
+    "github.com/dailyyoga/nexgo/routine"
 )
 
 func main() {

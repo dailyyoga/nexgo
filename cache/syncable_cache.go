@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dailyyoga/go-kit/logger"
-	"github.com/dailyyoga/go-kit/routine"
+	"github.com/dailyyoga/nexgo/logger"
+	"github.com/dailyyoga/nexgo/routine"
 	"go.uber.org/zap"
 )
 

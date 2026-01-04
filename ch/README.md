@@ -15,7 +15,7 @@ A unified Go client library for ClickHouse with support for both query operation
 ## Installation
 
 ```bash
-go get github.com/dailyyoga/go-kit/ch
+go get github.com/dailyyoga/nexgo/ch
 ```
 
 ## Quick Start
@@ -29,7 +29,7 @@ import (
     "context"
     "log"
 
-    "github.com/dailyyoga/go-kit/ch"
+    "github.com/dailyyoga/nexgo/ch"
     "go.uber.org/zap"
 )
 
@@ -233,7 +233,7 @@ The library automatically converts between Go types and ClickHouse types:
 ## Error Handling
 
 ```go
-import "github.com/dailyyoga/go-kit/ch"
+import "github.com/dailyyoga/nexgo/ch"
 
 // Common errors
 var (

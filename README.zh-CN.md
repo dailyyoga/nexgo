@@ -1,4 +1,4 @@
-# go-kit
+# nexgo
 
 一个用于常见基础设施模式的 Go 工具包集合。
 
@@ -87,7 +87,7 @@
 ## 安装
 
 ```bash
-go get github.com/dailyyoga/go-kit
+go get github.com/dailyyoga/nexgo
 ```
 
 ## 快速开始
@@ -96,7 +96,7 @@ go get github.com/dailyyoga/go-kit
 
 **默认配置：**
 ```go
-import "github.com/dailyyoga/go-kit/logger"
+import "github.com/dailyyoga/nexgo/logger"
 
 // 使用默认配置（info 级别、JSON 编码、stdout 输出）
 log, _ := logger.New(nil)
@@ -107,7 +107,7 @@ log.Info("application started")
 
 **自定义配置：**
 ```go
-import "github.com/dailyyoga/go-kit/logger"
+import "github.com/dailyyoga/nexgo/logger"
 
 cfg := &logger.Config{
     Level:            "debug",
@@ -124,8 +124,8 @@ defer log.Sync()
 **基本用法：**
 ```go
 import (
-    "github.com/dailyyoga/go-kit/db"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/db"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -173,8 +173,8 @@ if err := database.Ping(ctx); err != nil {
 
 ```go
 import (
-    "github.com/dailyyoga/go-kit/ch"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/ch"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -191,8 +191,8 @@ writer.Write(ctx, events)
 **消费者：**
 ```go
 import (
-    "github.com/dailyyoga/go-kit/kafka"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/kafka"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -208,8 +208,8 @@ consumer.Start(ctx, func(ctx context.Context, msg *kafka.Message) error {
 **生产者：**
 ```go
 import (
-    "github.com/dailyyoga/go-kit/kafka"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/kafka"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -227,8 +227,8 @@ producer.Produce(ctx, &kafka.Message{
 
 ```go
 import (
-    "github.com/dailyyoga/go-kit/cron"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/cron"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -243,8 +243,8 @@ defer manager.Close()
 **使用 Runner（跟踪和等待）：**
 ```go
 import (
-    "github.com/dailyyoga/go-kit/routine"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/routine"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -264,8 +264,8 @@ runner.Wait() // 等待所有 goroutine 完成
 **独立函数（即发即弃）：**
 ```go
 import (
-    "github.com/dailyyoga/go-kit/routine"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/routine"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
@@ -285,8 +285,8 @@ routine.GoNamed(log, "background-task", func() {
 
 ```go
 import (
-    "github.com/dailyyoga/go-kit/cache"
-    "github.com/dailyyoga/go-kit/logger"
+    "github.com/dailyyoga/nexgo/cache"
+    "github.com/dailyyoga/nexgo/logger"
 )
 
 log, _ := logger.New(nil)
