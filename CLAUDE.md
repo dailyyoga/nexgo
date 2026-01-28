@@ -577,6 +577,7 @@ if err := c.Sync(ctx); err != nil {
 ```go
 cfg := &cache.RedisConfig{
     Addr:            "localhost:6379",  // Redis address (required)
+    Username:        "",                 // Username for ACL auth (Redis 6.0+, default: "")
     Password:        "",                 // Auth password (default: "")
     DB:              0,                  // Database number (default: 0)
     PoolSize:        10,                 // Max connections (default: 10)

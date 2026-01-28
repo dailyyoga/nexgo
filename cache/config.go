@@ -54,6 +54,7 @@ func (c *SyncableCacheConfig) Validate() error {
 // RedisConfig holds configuration for Redis client
 type RedisConfig struct {
 	Addr            string        `mapstructure:"addr"`               // Redis address (default: localhost:6379)
+	Username        string        `mapstructure:"username"`           // Username for ACL auth (Redis 6.0+, default: "")
 	Password        string        `mapstructure:"password"`           // Password for auth (default: "")
 	DB              int           `mapstructure:"db"`                 // Database number (default: 0)
 	PoolSize        int           `mapstructure:"pool_size"`          // Max connections (default: 10)
@@ -84,6 +85,7 @@ func DefaultRedisConfig() *RedisConfig {
 func (c *RedisConfig) Options() *redis.Options {
 	return &redis.Options{
 		Addr:            c.Addr,
+		Username:        c.Username,
 		Password:        c.Password,
 		DB:              c.DB,
 		PoolSize:        c.PoolSize,

@@ -65,6 +65,25 @@ func TestRedisConfig_Options(t *testing.T) {
 	}
 }
 
+func TestRedisConfig_Options_WithUsername(t *testing.T) {
+	cfg := &RedisConfig{
+		Addr:     "localhost:6379",
+		Username: "myuser",
+		Password: "mypassword",
+		DB:       2,
+	}
+	opts := cfg.Options()
+	if opts.Username != "myuser" {
+		t.Errorf("expected username 'myuser', got '%s'", opts.Username)
+	}
+	if opts.Password != "mypassword" {
+		t.Errorf("expected password 'mypassword', got '%s'", opts.Password)
+	}
+	if opts.DB != 2 {
+		t.Errorf("expected DB 2, got %d", opts.DB)
+	}
+}
+
 // ============ String Operations ============
 
 func TestRedis_GetSet(t *testing.T) {
@@ -439,5 +458,99 @@ func TestRedis_PoolStats(t *testing.T) {
 	// Stats should be valid (TotalConns >= 0)
 	if stats.TotalConns < 0 {
 		t.Errorf("unexpected TotalConns: %d", stats.TotalConns)
+	}
+}
+
+// ============ ACL Authentication Tests ============
+
+func TestNewRedis_WithUsernamePassword(t *testing.T) {
+	mr, _ := miniredis.Run()
+	defer mr.Close()
+
+	// Set up ACL authentication with username and password
+	mr.RequireUserAuth("testuser", "testpass")
+
+	// Connect with correct username and password
+	rdb, err := NewRedis(testLogger(t), &RedisConfig{
+		Addr:        mr.Addr(),
+		Username:    "testuser",
+		Password:    "testpass",
+		DialTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("expected successful connection with username/password, got error: %v", err)
+	}
+	defer rdb.Close()
+
+	// Verify connection works
+	ctx := context.Background()
+	if err := rdb.Set(ctx, "key", "value", 0).Err(); err != nil {
+		t.Errorf("Set failed: %v", err)
+	}
+	if val, _ := rdb.Get(ctx, "key").Result(); val != "value" {
+		t.Errorf("expected 'value', got '%s'", val)
+	}
+}
+
+func TestNewRedis_WrongUsernamePassword(t *testing.T) {
+	mr, _ := miniredis.Run()
+	defer mr.Close()
+
+	// Set up ACL authentication
+	mr.RequireUserAuth("testuser", "testpass")
+
+	// Try to connect with wrong username
+	_, err := NewRedis(testLogger(t), &RedisConfig{
+		Addr:        mr.Addr(),
+		Username:    "wronguser",
+		Password:    "testpass",
+		DialTimeout: time.Second,
+	})
+	if err == nil {
+		t.Error("expected authentication error with wrong username")
+	}
+
+	// Try to connect with wrong password
+	_, err = NewRedis(testLogger(t), &RedisConfig{
+		Addr:        mr.Addr(),
+		Username:    "testuser",
+		Password:    "wrongpass",
+		DialTimeout: time.Second,
+	})
+	if err == nil {
+		t.Error("expected authentication error with wrong password")
+	}
+
+	// Try to connect without credentials
+	_, err = NewRedis(testLogger(t), &RedisConfig{
+		Addr:        mr.Addr(),
+		DialTimeout: time.Second,
+	})
+	if err == nil {
+		t.Error("expected authentication error without credentials")
+	}
+}
+
+func TestNewRedis_PasswordOnlyAuth(t *testing.T) {
+	mr, _ := miniredis.Run()
+	defer mr.Close()
+
+	// Set up password-only authentication (Redis < 6.0 style)
+	mr.RequireAuth("secretpassword")
+
+	// Connect with password only (no username)
+	rdb, err := NewRedis(testLogger(t), &RedisConfig{
+		Addr:        mr.Addr(),
+		Password:    "secretpassword",
+		DialTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("expected successful connection with password-only auth, got error: %v", err)
+	}
+	defer rdb.Close()
+
+	// Verify connection works
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		t.Errorf("Ping failed: %v", err)
 	}
 }
