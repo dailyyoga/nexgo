@@ -29,6 +29,8 @@ type Client interface {
 	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
 	// QueryRow executes a query that is expected to return at most one row
 	QueryRow(ctx context.Context, query string, args ...any) driver.Row
+	// Exec executes a query without returning any rows (for INSERT, CREATE, ALTER, etc.)
+	Exec(ctx context.Context, query string, args ...any) error
 	// Close closes the client and all associated resources
 	Close() error
 }

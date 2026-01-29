@@ -133,6 +133,26 @@ func (c *defaultClient) QueryRow(ctx context.Context, query string, args ...any)
 	return c.conn.QueryRow(ctx, query, args...)
 }
 
+// Exec executes a query without returning any rows (for INSERT, CREATE, ALTER, etc.)
+func (c *defaultClient) Exec(ctx context.Context, query string, args ...any) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.closed {
+		return ErrConnectionClosed
+	}
+
+	if err := c.conn.Exec(ctx, query, args...); err != nil {
+		c.logger.Error("exec failed",
+			zap.String("query", query),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	return nil
+}
+
 // Close closes the client and all associated resources
 func (c *defaultClient) Close() error {
 	c.mu.Lock()
