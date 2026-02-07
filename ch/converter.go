@@ -465,6 +465,8 @@ func (c *IntConverter) Convert(val any, log logger.Logger) (any, error) {
 			return int64(0), nil
 		}
 		return int64(*v), nil
+	case uint16:
+		return int64(v), nil
 	case *uint16:
 		if v == nil {
 			return int64(0), nil
