@@ -2,12 +2,14 @@ package ch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/dailyyoga/nexgo/logger"
 	"github.com/smallnest/chanx"
 	"go.uber.org/zap"
@@ -282,12 +284,31 @@ func (w *defaultWriter) flush(buffer map[TableName][]Table) {
 	)
 }
 
-// batchInsert batch insert data to clickhouse
+// batchInsert batch insert data to clickhouse.
+// If a column count mismatch is detected (e.g. table schema changed after a DDL),
+// it refreshes the cached schema and retries once.
 func (w *defaultWriter) batchInsert(ctx context.Context, table TableName, rows []Table) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
+	err := w.doBatchInsert(ctx, table, rows)
+	if err != nil && isColumnCountMismatch(err) {
+		w.logger.Warn("column count mismatch detected, refreshing table schema and retrying",
+			zap.String("table", string(table)),
+			zap.Error(err),
+		)
+		if refreshErr := w.RefreshTableSchema(ctx, table); refreshErr != nil {
+			w.logger.Error("failed to refresh table schema during retry", zap.Error(refreshErr))
+			return err
+		}
+		return w.doBatchInsert(ctx, table, rows)
+	}
+	return err
+}
+
+// doBatchInsert performs the actual batch insert to clickhouse
+func (w *defaultWriter) doBatchInsert(ctx context.Context, table TableName, rows []Table) error {
 	// get table columns
 	columns, err := w.getTableColumns(ctx, table)
 	if err != nil {
@@ -320,6 +341,15 @@ func (w *defaultWriter) batchInsert(ctx context.Context, table TableName, rows [
 	}
 
 	return nil
+}
+
+// isColumnCountMismatch checks if the error is caused by a column count mismatch
+// between the cached schema and the actual table schema in ClickHouse.
+// This happens when the table schema changes (e.g. ALTER TABLE ADD COLUMN)
+// while the writer is holding a stale cached schema.
+func isColumnCountMismatch(err error) bool {
+	var blockErr *proto.BlockError
+	return errors.As(err, &blockErr) && blockErr.Op == "Append"
 }
 
 // fetchTableColumns fetch table columns from clickhouse (not using cache)
