@@ -34,6 +34,9 @@ type WriterConfig struct {
 	MaxWaitTime time.Duration `mapstructure:"max_wait_time"`
 	// table schema cache refresh interval, 0 means not auto refresh
 	SchemaRefreshInterval time.Duration `mapstructure:"schema_refresh_interval"`
+	// MaxRetries is the maximum number of retries for transient errors during batch insert.
+	// Default is 3. Set to 0 to use default.
+	MaxRetries int `mapstructure:"max_retries"`
 }
 
 func DefaultConfig() *Config {
@@ -52,6 +55,7 @@ func DefaultWriterConfig() *WriterConfig {
 		MinFlushSize:          500,
 		MaxWaitTime:           60 * time.Second,
 		SchemaRefreshInterval: 5 * time.Minute,
+		MaxRetries:            3,
 	}
 }
 
@@ -82,6 +86,9 @@ func (c *Config) Validate() error {
 		}
 		if c.WriterConfig.MaxWaitTime < 0 {
 			return ErrInvalidConfig("writer.max_wait_time cannot be negative")
+		}
+		if c.WriterConfig.MaxRetries < 0 {
+			return ErrInvalidConfig("writer.max_retries cannot be negative")
 		}
 	}
 	return nil

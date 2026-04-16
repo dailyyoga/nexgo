@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,6 +62,11 @@ func newWriterWithConn(conn driver.Conn, config *Config, log logger.Logger) Writ
 		done:         make(chan struct{}),
 	}
 
+	// apply defaults for fields that may be absent in existing configs
+	if config.WriterConfig.MaxRetries == 0 {
+		config.WriterConfig.MaxRetries = DefaultWriterConfig().MaxRetries
+	}
+
 	// initialize schema refresh ticker (if enabled)
 	if config.WriterConfig.SchemaRefreshInterval > 0 {
 		writer.schemaRefreshTicker = time.NewTicker(config.WriterConfig.SchemaRefreshInterval)
@@ -71,6 +78,7 @@ func newWriterWithConn(conn driver.Conn, config *Config, log logger.Logger) Writ
 		zap.Int("min_flush_size", config.WriterConfig.MinFlushSize),
 		zap.Duration("max_wait_time", config.WriterConfig.MaxWaitTime),
 		zap.Duration("schema_refresh_interval", config.WriterConfig.SchemaRefreshInterval),
+		zap.Int("max_retries", config.WriterConfig.MaxRetries),
 	)
 
 	return writer
@@ -263,17 +271,42 @@ func (w *defaultWriter) flush(buffer map[TableName][]Table) {
 	successRows := 0
 	failedRows := 0
 	totalRows := 0
+	maxRetries := w.config.WriterConfig.MaxRetries
 
 	// flush each table data
 	for table, rows := range buffer {
 		totalRows += len(rows)
 
-		if err := w.batchInsert(context.Background(), table, rows); err != nil {
-			w.logger.Error("failed to batch insert", zap.Error(err))
+		var lastErr error
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			lastErr = w.batchInsert(context.Background(), table, rows)
+			if lastErr == nil {
+				successRows += len(rows)
+				break
+			}
+			// only retry on transient errors
+			if !isRetryableError(lastErr) || attempt == maxRetries {
+				break
+			}
+			backoff := time.Duration(1<<attempt) * time.Second // 1s, 2s, 4s...
+			w.logger.Warn("transient error, retrying batch insert",
+				zap.String("table", string(table)),
+				zap.Int("attempt", attempt+1),
+				zap.Int("max_retries", maxRetries),
+				zap.Duration("backoff", backoff),
+				zap.Error(lastErr),
+			)
+			time.Sleep(backoff)
+		}
+
+		if lastErr != nil {
+			w.logger.Error("batch insert failed",
+				zap.String("table", string(table)),
+				zap.Int("rows", len(rows)),
+				zap.Error(lastErr),
+			)
 			failedRows += len(rows)
-			// @TODO: retry logic or fallback strategy, etc.
-		} else {
-			successRows += len(rows)
+			// @TODO: fallback strategy, e.g. send failed rows to a DLQ (Dead Letter Queue) for manual recovery
 		}
 	}
 
@@ -285,7 +318,7 @@ func (w *defaultWriter) flush(buffer map[TableName][]Table) {
 }
 
 // batchInsert batch insert data to clickhouse.
-// If a column count mismatch is detected (e.g. table schema changed after a DDL),
+// If a schema-related error is detected (e.g. column count/type mismatch after DDL),
 // it refreshes the cached schema and retries once.
 func (w *defaultWriter) batchInsert(ctx context.Context, table TableName, rows []Table) error {
 	if len(rows) == 0 {
@@ -293,8 +326,8 @@ func (w *defaultWriter) batchInsert(ctx context.Context, table TableName, rows [
 	}
 
 	err := w.doBatchInsert(ctx, table, rows)
-	if err != nil && isColumnCountMismatch(err) {
-		w.logger.Warn("column count mismatch detected, refreshing table schema and retrying",
+	if err != nil && isSchemaRelatedError(err) {
+		w.logger.Warn("schema mismatch detected, refreshing table schema and retrying",
 			zap.String("table", string(table)),
 			zap.Error(err),
 		)
@@ -343,13 +376,58 @@ func (w *defaultWriter) doBatchInsert(ctx context.Context, table TableName, rows
 	return nil
 }
 
-// isColumnCountMismatch checks if the error is caused by a column count mismatch
+// isSchemaRelatedError checks if the error is caused by a schema mismatch
 // between the cached schema and the actual table schema in ClickHouse.
-// This happens when the table schema changes (e.g. ALTER TABLE ADD COLUMN)
-// while the writer is holding a stale cached schema.
-func isColumnCountMismatch(err error) bool {
+// This covers:
+//   - Column count mismatch (ALTER TABLE ADD/DROP COLUMN) → BlockError.Op == "Append"
+//   - Column type mismatch (ALTER TABLE MODIFY COLUMN)    → BlockError.Op == "AppendRow"
+func isSchemaRelatedError(err error) bool {
 	var blockErr *proto.BlockError
-	return errors.As(err, &blockErr) && blockErr.Op == "Append"
+	return errors.As(err, &blockErr) && (blockErr.Op == "Append" || blockErr.Op == "AppendRow")
+}
+
+// retryableExceptionCodes lists ClickHouse server error codes that are transient
+// and may succeed on retry.
+var retryableExceptionCodes = map[int32]bool{
+	159: true, // TIMEOUT_EXCEEDED
+	202: true, // TOO_MANY_SIMULTANEOUS_QUERIES
+	209: true, // SOCKET_TIMEOUT
+	210: true, // NETWORK_ERROR
+	241: true, // MEMORY_LIMIT_EXCEEDED
+	252: true, // TOO_MANY_PARTS
+	319: true, // UNKNOWN_STATUS_OF_INSERT
+}
+
+// isRetryableError checks if the error is transient and worth retrying.
+// Returns false for schema/data errors (handled by batchInsert) and permanent errors.
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// ClickHouse server exception with retryable code
+	var exc *proto.Exception
+	if errors.As(err, &exc) {
+		return retryableExceptionCodes[exc.Code]
+	}
+
+	// Network errors (connection refused, reset, timeout, etc.)
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
+	}
+
+	// Connection closed unexpectedly
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	// Context deadline exceeded (not context.Canceled, which is intentional)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	return false
 }
 
 // fetchTableColumns fetch table columns from clickhouse (not using cache)
