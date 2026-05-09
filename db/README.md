@@ -1,9 +1,10 @@
 # db
 
-A MySQL database client wrapper built on GORM with connection pool management, structured logging, and configurable query settings.
+A SQL database client wrapper built on GORM with multi-driver support, connection pool management, structured logging, and configurable query settings.
 
 ## Features
 
+- **Multi-Driver**: First-class support for **MySQL** and **PostgreSQL** with a shared abstraction (`BaseConfig` + `Connector` interface) so adding new drivers is trivial
 - **GORM Integration**: Built on top of GORM v2 for robust ORM capabilities
 - **Connection Pool Management**: Configurable max connections, idle connections, and connection lifetimes
 - **Unified Logging**: Integrates with the project's logger package using zap for structured SQL logging
@@ -20,15 +21,12 @@ go get github.com/dailyyoga/nexgo/db
 
 ## Quick Start
 
-### Basic Usage
+### MySQL
 
 ```go
 package main
 
 import (
-    "context"
-    "log"
-
     "github.com/dailyyoga/nexgo/db"
     "github.com/dailyyoga/nexgo/logger"
 )
@@ -40,64 +38,79 @@ type User struct {
 }
 
 func main() {
-    // Create logger
-    log, err := logger.New(nil)
+    log, _ := logger.New(nil)
+    defer log.Sync()
+
+    cfg := &db.Config{
+        BaseConfig: db.BaseConfig{
+            Host:     "localhost",
+            Port:     3306,
+            User:     "root",
+            Password: "password",
+            Database: "myapp",
+        },
+    }
+
+    database, err := db.NewMySQL(log, cfg)
     if err != nil {
         panic(err)
     }
-    defer log.Sync()
-
-    // Configure database
-    cfg := &db.Config{
-        Host:     "localhost",
-        Port:     3306,
-        User:     "root",
-        Password: "password",
-        Database: "myapp",
-    }
-
-    // Create database client
-    database, err := db.NewMySQL(log, cfg)
-    if err != nil {
-        log.Fatal("failed to connect database:", err)
-    }
     defer database.Close()
 
-    // Get GORM DB instance
-    gormDB, err := database.DB()
-    if err != nil {
-        log.Fatal("failed to get db instance:", err)
-    }
-
-    // Use GORM for operations
+    gormDB, _ := database.DB()
     gormDB.AutoMigrate(&User{})
-
-    // Create
     gormDB.Create(&User{Name: "Alice", Age: 25})
-
-    // Query
-    var user User
-    gormDB.First(&user, "name = ?", "Alice")
-
-    // Update
-    gormDB.Model(&user).Update("Age", 26)
-
-    // Delete
-    gormDB.Delete(&user)
 }
 ```
 
-### With Context
+### PostgreSQL
+
+```go
+package main
+
+import (
+    "github.com/dailyyoga/nexgo/db"
+    "github.com/dailyyoga/nexgo/logger"
+)
+
+func main() {
+    log, _ := logger.New(nil)
+    defer log.Sync()
+
+    cfg := &db.PostgresConfig{
+        BaseConfig: db.BaseConfig{
+            Host:     "localhost",
+            Port:     5432,
+            User:     "postgres",
+            Password: "password",
+            Database: "myapp",
+        },
+        SSLMode:         "disable",
+        TimeZone:        "UTC",
+        SearchPath:      "public",
+        ApplicationName: "my-service",
+    }
+
+    database, err := db.NewPostgres(log, cfg)
+    if err != nil {
+        panic(err)
+    }
+    defer database.Close()
+
+    gormDB, _ := database.DB()
+    // Use the same GORM API regardless of driver
+}
+```
+
+### Working With Context
 
 ```go
 ctx := context.Background()
 
-// Ping database
 if err := database.Ping(ctx); err != nil {
     log.Fatal("database not reachable:", err)
 }
 
-// Use context in queries
 gormDB, _ := database.DB()
 var users []User
 gormDB.WithContext(ctx).Where("age > ?", 18).Find(&users)
@@ -105,146 +118,180 @@ gormDB.WithContext(ctx).Where("age > ?", 18).Find(&users)
 
 ## Configuration
 
-### Config Structure
+Configuration is split into a shared `BaseConfig` (connection identity, pool, logging) and driver-specific structs that embed it. Field access via promotion works as if the fields were declared inline (`cfg.Host`, `cfg.MaxOpenConns`, ...), and YAML/mapstructure payloads stay flat thanks to `mapstructure:",squash"`.
+
+### BaseConfig (shared)
+
+```go
+type BaseConfig struct {
+    Host string             // required
+    Port int                // driver default applied via MergeDefaults
+    User string             // required
+    Password string         // required
+    Database string         // required
+
+    MaxOpenConns    int           // default 25
+    MaxIdleConns    int           // default 10
+    ConnMaxLifetime time.Duration // default 30m
+    ConnMaxIdleTime time.Duration // default 10m
+
+    LogLevel      string        // silent | error | warn | info; default warn
+    SlowThreshold time.Duration // default 1s
+}
+```
+
+### MySQL — `Config`
 
 ```go
 type Config struct {
-    // Host is the host of the database (required)
-    Host string
-
-    // Port is the port of the database
-    // Default: 3306
-    Port int
-
-    // User is the database user (required)
-    User string
-
-    // Password is the database password (required)
-    Password string
-
-    // Database is the name of the database (required)
-    Database string
-
-    // MaxOpenConns is the maximum number of open connections to the database
-    // Default: 25
-    MaxOpenConns int
-
-    // MaxIdleConns is the maximum number of idle connections in the pool
-    // Default: 10
-    MaxIdleConns int
-
-    // ConnMaxLifetime is the maximum lifetime of a connection
-    // Default: 1800 * time.Second (30 minutes)
-    ConnMaxLifetime time.Duration
-
-    // ConnMaxIdleTime is the maximum idle time of a connection
-    // Default: 600 * time.Second (10 minutes)
-    ConnMaxIdleTime time.Duration
-
-    // LogLevel is the GORM log level
-    // Options: "silent", "error", "warn", "info"
-    // Default: "warn"
-    LogLevel string
-
-    // SlowThreshold is the threshold for slow query detection
-    // Default: 1 * time.Second
-    SlowThreshold time.Duration
-
-    // Charset is the charset of the database connection
-    // Default: "utf8mb4"
-    Charset string
-
-    // Loc is the timezone location for parseTime
-    // Default: "Local"
-    Loc string
+    BaseConfig `mapstructure:",squash"`
+    Charset string // default "utf8mb4"
+    Loc     string // default "Local"
 }
 ```
 
-### Default Configuration
+Default `Port`: `3306`.
+
+### PostgreSQL — `PostgresConfig`
 
 ```go
-// Using defaults for optional fields
-cfg := &db.Config{
-    Host:     "localhost",
-    User:     "root",
-    Password: "password",
-    Database: "myapp",
-    // Port, MaxOpenConns, etc. will use defaults
+type PostgresConfig struct {
+    BaseConfig `mapstructure:",squash"`
+    SSLMode         string // disable | require | verify-ca | verify-full; default "disable"
+    TimeZone        string // IANA tz name; default "UTC"
+    SearchPath      string // PG search_path; default "public"
+    ApplicationName string // populates pg_stat_activity.application_name (optional)
 }
-database, err := db.NewMySQL(log, cfg)
-
-// Or use nil for full defaults (will fail validation - required fields missing)
-// database, err := db.NewMySQL(log, nil)
 ```
 
-### Custom Configuration
+Default `Port`: `5432`.
+
+### YAML Loading
+
+Because driver-specific configs embed `BaseConfig` with `,squash`, YAML keys remain flat:
+
+```yaml
+# MySQL
+mysql:
+  host: localhost
+  port: 3306
+  user: root
+  password: secret
+  database: myapp
+  max_open_conns: 50
+  charset: utf8mb4
+  loc: Local
+
+# PostgreSQL
+postgres:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: secret
+  database: myapp
+  max_open_conns: 50
+  ssl_mode: require
+  time_zone: UTC
+  search_path: public
+  application_name: my-service
+```
+
+### Defaults & Custom Tuning
 
 ```go
-cfg := &db.Config{
-    Host:            "db.example.com",
-    Port:            3306,
-    User:            "app_user",
-    Password:        "secure_password",
-    Database:        "production_db",
-    MaxOpenConns:    50,
-    MaxIdleConns:    20,
-    ConnMaxLifetime: 3600 * time.Second,  // 1 hour
-    ConnMaxIdleTime: 900 * time.Second,   // 15 minutes
-    LogLevel:        "info",              // Verbose SQL logging
-    SlowThreshold:   500 * time.Millisecond,  // Detect queries > 500ms
-    Charset:         "utf8mb4",
-    Loc:             "UTC",
+// Minimum required fields — every other field falls back to defaults via MergeDefaults
+cfg := &db.PostgresConfig{
+    BaseConfig: db.BaseConfig{
+        Host: "localhost", User: "postgres", Password: "pw", Database: "myapp",
+    },
 }
-database, err := db.NewMySQL(log, cfg)
+database, _ := db.NewPostgres(log, cfg)
+
+// Heavily tuned MySQL
+cfg := &db.Config{
+    BaseConfig: db.BaseConfig{
+        Host: "db.example.com", Port: 3306,
+        User: "app", Password: "secret", Database: "prod",
+        MaxOpenConns:    50,
+        MaxIdleConns:    20,
+        ConnMaxLifetime: time.Hour,
+        ConnMaxIdleTime: 15 * time.Minute,
+        LogLevel:        "info",
+        SlowThreshold:   500 * time.Millisecond,
+    },
+    Charset: "utf8mb4",
+    Loc:     "UTC",
+}
 ```
 
 ## Architecture
 
-### Core Components
+### Database Interface
 
-#### Database Interface
+The driver-neutral handle returned by both `NewMySQL` and `NewPostgres`:
 
 ```go
 type Database interface {
-    // DB returns the underlying GORM DB instance
-    DB() (*gorm.DB, error)
-
-    // Ping checks if the database connection is alive
+    DB() (*gorm.DB, error)         // underlying GORM DB
     Ping(ctx context.Context) error
-
-    // Close closes the database connection
     Close() error
 }
 ```
 
-#### Custom GORM Logger
+### Connector Interface
 
-The package implements a custom GORM logger that bridges GORM's logging interface with the project's zap-based logger:
+Driver-specific configs implement `Connector`. The shared connection helper (`openGorm`) takes any `Connector`, so adding a new driver is mostly a matter of writing a new `*Config` type and a thin `New<Driver>` wrapper.
+
+```go
+type Connector interface {
+    Validate() error
+    DSN() string
+    Base() *BaseConfig
+    Dialector() gorm.Dialector
+}
+```
+
+Both `*Config` (MySQL) and `*PostgresConfig` satisfy this interface.
+
+### Custom GORM Logger
+
+Bridges GORM's logging interface with the project's zap-based logger:
 
 - **Structured Logging**: All SQL logs include structured fields (elapsed time, rows affected, SQL statement)
 - **Slow Query Detection**: Queries exceeding `SlowThreshold` are logged at WARN level
 - **Error Logging**: SQL errors are logged at ERROR level with full context
-- **Log Levels**: Supports silent, error, warn, and info levels
+- **Log Levels**: Supports `silent`, `error`, `warn`, and `info`
 
 ### Connection Pool
 
-The client configures the underlying `database/sql` connection pool with:
+The client configures the underlying `database/sql` pool with:
 
-- **MaxOpenConns**: Limits total connections to prevent database overload
-- **MaxIdleConns**: Keeps idle connections ready for reuse
-- **ConnMaxLifetime**: Closes long-lived connections to handle database restarts
+- **MaxOpenConns**: Total connection ceiling
+- **MaxIdleConns**: Idle connections kept warm for reuse
+- **ConnMaxLifetime**: Closes long-lived connections to handle DB restarts
 - **ConnMaxIdleTime**: Closes idle connections to free resources
 
 ### Data Flow
 
-1. User calls `NewMySQL(log, cfg)`
-2. Configuration is validated and merged with defaults
-3. GORM DB instance is created with custom logger
-4. Connection pool is configured
-5. Initial `Ping()` test ensures connectivity
-6. User retrieves `*gorm.DB` via `DB()` method
-7. All GORM operations use the configured logger and pool settings
-8. User calls `Close()` to release connections gracefully
+1. Caller invokes `NewMySQL(log, cfg)` / `NewPostgres(log, cfg)`
+2. `MergeDefaults()` fills zero-valued fields, `Validate()` runs shared + driver-specific checks
+3. The shared `openGorm(log, cfg)` helper:
+   - Builds the GORM-side `Dialector` via `cfg.Dialector()`
+   - Constructs `*gorm.DB` with the custom logger and `PrepareStmt: true`
+   - Applies pool settings from `cfg.Base()`
+   - Issues an initial `Ping()` to confirm connectivity
+4. Caller retrieves `*gorm.DB` via `database.DB()` and runs ORM operations
+5. `Close()` releases connections gracefully on shutdown
+
+### Adding a New Driver
+
+To add a new SQL driver (e.g., SQLite, ClickHouse via gorm):
+
+1. Define `<Driver>Config` embedding `BaseConfig` with any driver-specific fields
+2. Implement `Validate()`, `DSN()`, `Base()`, `Dialector()` (the `Connector` contract)
+3. Provide a `New<Driver>(log, *<Driver>Config) (Database, error)` wrapper that calls `cfg.MergeDefaults()`, `cfg.Validate()`, then `openGorm(log, cfg)`
+
+The pool, logger, and connection lifecycle are inherited automatically.
 
 ## Error Handling
 
@@ -272,19 +319,16 @@ func ErrConnection(err error) error
 ```go
 import "errors"
 
-database, err := db.NewMySQL(log, cfg)
+database, err := db.NewPostgres(log, cfg)
 if err != nil {
-    // Check for invalid configuration
     if strings.Contains(err.Error(), "invalid config") {
         log.Error("configuration error:", err)
     }
-    // Check for connection failure
     if strings.Contains(err.Error(), "connection failed") {
         log.Error("cannot connect to database:", err)
     }
 }
 
-// Check connection status
 gormDB, err := database.DB()
 if err != nil {
     if errors.Is(err, db.ErrConnectionNotEstablished) {
@@ -295,17 +339,16 @@ if err != nil {
 
 ## GORM Usage Examples
 
-### Basic CRUD Operations
+The GORM API is identical regardless of driver — these examples apply to both MySQL and PostgreSQL.
+
+### Basic CRUD
 
 ```go
 gormDB, _ := database.DB()
 
 // Create
 user := User{Name: "Bob", Age: 30}
-result := gormDB.Create(&user)
-if result.Error != nil {
-    log.Error("create failed:", result.Error)
-}
+gormDB.Create(&user)
 
 // Read
 var foundUser User
@@ -323,17 +366,12 @@ gormDB.Delete(&user)
 ### Advanced Queries
 
 ```go
-gormDB, _ := database.DB()
-
 // Transactions
 err := gormDB.Transaction(func(tx *gorm.DB) error {
     if err := tx.Create(&user1).Error; err != nil {
         return err
     }
-    if err := tx.Create(&user2).Error; err != nil {
-        return err
-    }
-    return nil
+    return tx.Create(&user2).Error
 })
 
 // Associations
@@ -342,15 +380,13 @@ type Order struct {
     UserID int64
     User   User
 }
-
-// Preload associations
 var orders []Order
 gormDB.Preload("User").Find(&orders)
 
 // Joins
 var results []struct {
-    UserName  string
-    OrderID   int64
+    UserName string
+    OrderID  int64
 }
 gormDB.Table("orders").
     Select("users.name as user_name, orders.id as order_id").
@@ -364,46 +400,30 @@ gormDB.Raw("SELECT COUNT(*) FROM users WHERE age > ?", 18).Scan(&count)
 
 ## Logging Examples
 
-### Log Levels
+### Setting Levels
 
 ```go
-// Silent: No SQL logs
-cfg := &db.Config{
-    LogLevel: "silent",
-}
-
-// Error: Only log SQL errors
-cfg := &db.Config{
-    LogLevel: "error",
-}
-
-// Warn: Log errors and slow queries
-cfg := &db.Config{
-    LogLevel: "warn",
-    SlowThreshold: 500 * time.Millisecond,
-}
-
-// Info: Log all SQL statements with details
-cfg := &db.Config{
-    LogLevel: "info",
-}
+cfg.LogLevel = "silent"  // No SQL logs
+cfg.LogLevel = "error"   // Only SQL errors
+cfg.LogLevel = "warn"    // Errors + slow queries
+cfg.LogLevel = "info"    // All SQL statements
 ```
 
-### Log Output Examples
+### Sample Output
 
-**Normal Query (Info Level)**:
+**Normal Query (info level)**:
 ```
 INFO  sql trace  component=gorm elapsed=2.3ms rows=5 sql="SELECT * FROM users WHERE age > 18"
 ```
 
-**Slow Query (Warn Level)**:
+**Slow Query (warn level)**:
 ```
 WARN  slow sql  component=gorm elapsed=1.2s rows=1000 sql="SELECT * FROM users" threshold=1s
 ```
 
-**SQL Error (Error Level)**:
+**SQL Error (error level)**:
 ```
-ERROR  sql error  component=gorm elapsed=1.1ms rows=0 sql="SELECT * FROM invalid_table" error="Error 1146: Table 'mydb.invalid_table' doesn't exist"
+ERROR sql error  component=gorm elapsed=1.1ms rows=0 sql="SELECT * FROM invalid_table" error="..."
 ```
 
 ## Best Practices
@@ -411,174 +431,96 @@ ERROR  sql error  component=gorm elapsed=1.1ms rows=0 sql="SELECT * FROM invalid
 ### 1. Connection Pool Sizing
 
 ```go
-// For low-traffic applications
-cfg := &db.Config{
-    MaxOpenConns: 10,
-    MaxIdleConns: 5,
-}
+// Low-traffic
+MaxOpenConns: 10, MaxIdleConns: 5
 
-// For high-traffic applications
-cfg := &db.Config{
-    MaxOpenConns: 100,
-    MaxIdleConns: 25,
-}
+// High-traffic
+MaxOpenConns: 100, MaxIdleConns: 25
 
-// General guideline: MaxIdleConns should be 20-50% of MaxOpenConns
+// Rule of thumb: MaxIdleConns is 20–50% of MaxOpenConns
 ```
 
-### 2. Context Usage
+### 2. Always Use Context
 
 ```go
-// Always use context for cancellation and timeout
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 
 gormDB, _ := database.DB()
 var users []User
 result := gormDB.WithContext(ctx).Find(&users)
-if result.Error != nil {
-    if errors.Is(result.Error, context.DeadlineExceeded) {
-        log.Error("query timeout")
-    }
+if errors.Is(result.Error, context.DeadlineExceeded) {
+    log.Error("query timeout")
 }
 ```
 
 ### 3. Graceful Shutdown
 
 ```go
-// Ensure connections are closed on shutdown
 defer database.Close()
-
-// In server shutdown handler
-func shutdown() {
-    log.Info("shutting down database connection")
-    if err := database.Close(); err != nil {
-        log.Error("failed to close database:", err)
-    }
-}
 ```
 
 ### 4. Health Checks
 
 ```go
-// Implement health check endpoint
 func healthCheck(w http.ResponseWriter, r *http.Request) {
     ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
     defer cancel()
-
     if err := database.Ping(ctx); err != nil {
         w.WriteHeader(http.StatusServiceUnavailable)
-        w.Write([]byte("database unhealthy"))
         return
     }
     w.WriteHeader(http.StatusOK)
-    w.Write([]byte("ok"))
 }
 ```
 
 ### 5. Slow Query Tuning
 
 ```go
-// Set aggressive threshold in development
-cfg := &db.Config{
-    LogLevel:      "warn",
-    SlowThreshold: 100 * time.Millisecond,  // Find queries > 100ms
-}
+// Aggressive in development
+SlowThreshold: 100 * time.Millisecond
 
-// Use normal threshold in production
-cfg := &db.Config{
-    LogLevel:      "warn",
-    SlowThreshold: 1 * time.Second,
-}
+// Normal in production
+SlowThreshold: 1 * time.Second
 ```
 
-### 6. Error Handling
+### 6. PostgreSQL: Pick the Right SSLMode
+
+| SSLMode       | When to use                                       |
+|---------------|---------------------------------------------------|
+| `disable`     | Local development, trusted private network        |
+| `require`     | Encrypted transport without certificate validation |
+| `verify-ca`   | Encrypted + verify CA chain                        |
+| `verify-full` | Production: encrypted + verify hostname + CA      |
+
+### 7. PostgreSQL: SearchPath & Schemas
+
+`SearchPath` is the equivalent of `USE schema` in MySQL. Set to a non-`public` value if your tables live in a custom schema:
 
 ```go
-gormDB, _ := database.DB()
-
-// Always check errors
-result := gormDB.Create(&user)
-if result.Error != nil {
-    // Check for specific GORM errors
-    if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-        log.Info("record not found")
-    } else if errors.Is(result.Error, gorm.ErrDuplicatedKey) {
-        log.Error("duplicate key violation")
-    } else {
-        log.Error("database error:", result.Error)
-    }
-}
+cfg.SearchPath = "myschema,public"
 ```
 
-## Use Cases
+## Performance Considerations
 
-### 1. Web Application Backend
-
-```go
-// Initialize database once at startup
-database, err := db.NewMySQL(log, cfg)
-if err != nil {
-    log.Fatal("database connection failed:", err)
-}
-defer database.Close()
-
-// Use in HTTP handlers
-func getUserHandler(w http.ResponseWriter, r *http.Request) {
-    gormDB, _ := database.DB()
-
-    var user User
-    result := gormDB.WithContext(r.Context()).First(&user, r.URL.Query().Get("id"))
-    if result.Error != nil {
-        http.Error(w, "user not found", http.StatusNotFound)
-        return
-    }
-    json.NewEncoder(w).Encode(user)
-}
-```
-
-### 2. Background Worker
+1. **Connection Pooling**: Size `MaxOpenConns` to expected concurrency
+2. **Prepared Statements**: Enabled by default
+3. **Indexing**: Ensure indexes on commonly queried columns
+4. **Batch Operations**: Use `CreateInBatches` for bulk inserts
+5. **Select Specific Columns**: Use `Select()` to avoid loading unneeded data
 
 ```go
-// Worker with periodic database operations
-func worker(ctx context.Context, database db.Database) {
-    gormDB, _ := database.DB()
+gormDB.CreateInBatches(users, 100)
 
-    ticker := time.NewTicker(1 * time.Minute)
-    defer ticker.Stop()
+var names []string
+gormDB.Model(&User{}).Select("name").Find(&names)
 
-    for {
-        select {
-        case <-ticker.C:
-            var pendingTasks []Task
-            gormDB.WithContext(ctx).Where("status = ?", "pending").Find(&pendingTasks)
-            processTasks(pendingTasks)
-        case <-ctx.Done():
-            return
-        }
-    }
-}
-```
-
-### 3. Data Migration Tool
-
-```go
-func migrate(database db.Database) error {
-    gormDB, _ := database.DB()
-
-    // Auto migrate schemas
-    if err := gormDB.AutoMigrate(&User{}, &Order{}, &Product{}); err != nil {
-        return fmt.Errorf("migration failed: %w", err)
-    }
-
-    log.Info("database migration completed")
-    return nil
-}
+gormDB.Where("email = ?", email).First(&user) // requires index on email
 ```
 
 ## Testing
 
-### Mock Database for Testing
+### Mock Database (driver-neutral)
 
 ```go
 import (
@@ -589,40 +531,21 @@ import (
 )
 
 func TestUserRepository(t *testing.T) {
-    // Create mock database
-    sqlDB, mock, err := sqlmock.New()
-    if err != nil {
-        t.Fatal(err)
-    }
+    sqlDB, mock, _ := sqlmock.New()
     defer sqlDB.Close()
 
-    // Create GORM DB with mock
-    gormDB, err := gorm.Open(mysql.New(mysql.Config{
-        Conn: sqlDB,
+    gormDB, _ := gorm.Open(mysql.New(mysql.Config{
+        Conn:                      sqlDB,
         SkipInitializeWithVersion: true,
     }), &gorm.Config{})
-    if err != nil {
-        t.Fatal(err)
-    }
 
-    // Set up expectations
     mock.ExpectQuery("SELECT \\* FROM `users`").
         WillReturnRows(sqlmock.NewRows([]string{"id", "name", "age"}).
             AddRow(1, "Alice", 25))
 
-    // Run test
     var user User
-    result := gormDB.First(&user)
-    if result.Error != nil {
-        t.Error("query failed:", result.Error)
-    }
-    if user.Name != "Alice" {
-        t.Errorf("expected Alice, got %s", user.Name)
-    }
-
-    // Verify expectations
-    if err := mock.ExpectationsWereMet(); err != nil {
-        t.Error("unfulfilled expectations:", err)
+    if err := gormDB.First(&user).Error; err != nil {
+        t.Error(err)
     }
 }
 ```
@@ -630,62 +553,25 @@ func TestUserRepository(t *testing.T) {
 ### Integration Testing
 
 ```go
-func TestDatabaseIntegration(t *testing.T) {
+func TestPostgresIntegration(t *testing.T) {
     if testing.Short() {
         t.Skip("skipping integration test")
     }
-
     log, _ := logger.New(nil)
-    cfg := &db.Config{
-        Host:     "localhost",
-        User:     "test",
-        Password: "test",
-        Database: "test_db",
+    cfg := &db.PostgresConfig{
+        BaseConfig: db.BaseConfig{
+            Host: "localhost", User: "test", Password: "test", Database: "test_db",
+        },
     }
-
-    database, err := db.NewMySQL(log, cfg)
+    database, err := db.NewPostgres(log, cfg)
     if err != nil {
-        t.Fatal("connection failed:", err)
+        t.Fatal(err)
     }
     defer database.Close()
-
-    gormDB, _ := database.DB()
-    gormDB.AutoMigrate(&User{})
-
-    // Test CRUD operations
-    user := User{Name: "TestUser", Age: 30}
-    gormDB.Create(&user)
-
-    var found User
-    gormDB.First(&found, user.ID)
-    if found.Name != user.Name {
-        t.Errorf("expected %s, got %s", user.Name, found.Name)
-    }
-
-    gormDB.Delete(&user)
+    // ... run real queries
 }
-```
-
-## Performance Considerations
-
-1. **Connection Pooling**: Properly size `MaxOpenConns` based on expected load
-2. **Prepared Statements**: Enabled by default for better performance
-3. **Index Usage**: Ensure proper indexes on frequently queried columns
-4. **Batch Operations**: Use `CreateInBatches` for bulk inserts
-5. **Select Specific Columns**: Use `Select()` to avoid loading unnecessary data
-
-```go
-// Efficient batch insert
-gormDB.CreateInBatches(users, 100)
-
-// Select only needed columns
-var names []string
-gormDB.Model(&User{}).Select("name").Find(&names)
-
-// Use indexes effectively
-gormDB.Where("email = ?", email).First(&user)  // Requires index on email
 ```
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](../LICENSE) file for details.

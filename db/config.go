@@ -2,51 +2,62 @@ package db
 
 import (
 	"fmt"
-	"slices"
-	"strings"
-	"time"
+
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
-// Config is the configuration for the database
-// It is used to configure the database connection pool and logging
+// Config is the configuration for a MySQL database connection.
+//
+// Shared connection / pool / logging fields live on the embedded BaseConfig.
+// Only MySQL-specific knobs (Charset, Loc) are declared here.
 type Config struct {
-	// Host is the host of the database
-	Host string `mapstructure:"host"`
-	// Port is the port of the database
-	// default: 3306
-	Port int `mapstructure:"port"`
-	// User is the user of the database
-	User string `mapstructure:"user"`
-	// Password is the password of the database
-	Password string `mapstructure:"password"`
-	// Database is the name of the database
-	Database string `mapstructure:"database"`
-	// MaxOpenConns is the maximum number of open connections to the database
-	// default: 10
-	MaxOpenConns int `mapstructure:"max_open_conns"`
-	// MaxIdleConns is the maximum number of idle connections to the database
-	// default: 10
-	MaxIdleConns int `mapstructure:"max_idle_conns"`
-	// ConnMaxLifetime is the maximum lifetime of a connection
-	// default: 1800 * time.Second
-	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
-	// ConnMaxIdleTime is the maximum idle time of a connection
-	// default: 600 * time.Second
-	ConnMaxIdleTime time.Duration `mapstructure:"conn_max_idle_time"`
-	// LogLevel is the log level of the database
-	// default: "warn"
-	LogLevel string `mapstructure:"log_level"`
-	// SlowThreshold is the threshold for slow queries
-	// default: 1 * time.Second
-	SlowThreshold time.Duration `mapstructure:"slow_threshold"`
-	// charset is the charset of the database
+	BaseConfig `mapstructure:",squash"`
+
+	// Charset is the charset of the database
 	// default: "utf8mb4"
 	Charset string `mapstructure:"charset"`
-	// loc is the location of the database
+	// Loc is the location of the database
 	// default: "Local"
 	Loc string `mapstructure:"loc"`
 }
 
+// DefaultConfig returns the default configuration for MySQL.
+func DefaultConfig() *Config {
+	c := &Config{
+		BaseConfig: BaseConfig{Port: 3306},
+		Charset:    "utf8mb4",
+		Loc:        "Local",
+	}
+	c.mergePoolDefaults()
+	return c
+}
+
+// MergeDefaults fills in zero-valued fields with their defaults and returns
+// the same pointer for chaining.
+func (c *Config) MergeDefaults() *Config {
+	if c.Port == 0 {
+		c.Port = 3306
+	}
+	c.mergePoolDefaults()
+	if c.Charset == "" {
+		c.Charset = "utf8mb4"
+	}
+	if c.Loc == "" {
+		c.Loc = "Local"
+	}
+	return c
+}
+
+// Validate validates the configuration for MySQL.
+func (c *Config) Validate() error {
+	if err := c.validateRequired(); err != nil {
+		return err
+	}
+	return c.validateLogLevel()
+}
+
+// DSN returns the MySQL DSN consumed by gorm.io/driver/mysql.
 func (c *Config) DSN() string {
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=True&loc=%s",
 		c.User, c.Password, c.Host, c.Port, c.Database,
@@ -54,80 +65,8 @@ func (c *Config) DSN() string {
 	)
 }
 
-// DefaultConfig returns the default configuration for the database
-func DefaultConfig() *Config {
-	return &Config{
-		Port:            3306,
-		MaxOpenConns:    25,
-		MaxIdleConns:    10,
-		ConnMaxLifetime: 1800 * time.Second,
-		ConnMaxIdleTime: 600 * time.Second,
-		LogLevel:        "warn",
-		SlowThreshold:   1 * time.Second,
-		Charset:         "utf8mb4",
-		Loc:             "Local",
-	}
-}
+// Base exposes the shared connection / pool / logging fields.
+func (c *Config) Base() *BaseConfig { return &c.BaseConfig }
 
-// Validate validates the configuration for the database
-func (c *Config) Validate() error {
-	if c.Host == "" {
-		return ErrInvalidConfig("host is required")
-	}
-	if c.Port <= 0 {
-		return ErrInvalidConfig("port is required")
-	}
-	if c.User == "" {
-		return ErrInvalidConfig("user is required")
-	}
-	if c.Password == "" {
-		return ErrInvalidConfig("password is required")
-	}
-	if c.Database == "" {
-		return ErrInvalidConfig("database is required")
-	}
-
-	validLogLevels := []string{"silent", "error", "warn", "info"}
-	if !slices.ContainsFunc(validLogLevels, func(level string) bool {
-		return strings.EqualFold(c.LogLevel, level)
-	}) {
-		errMsg := fmt.Sprintf("log_level %q must be one of: %s",
-			c.LogLevel, strings.Join(validLogLevels, ", "))
-		return ErrInvalidConfig(errMsg)
-	}
-	return nil
-}
-
-// MergeDefaults merges the default configuration with the given configuration
-// It returns the merged configuration
-func (c *Config) MergeDefaults() *Config {
-	defaults := DefaultConfig()
-	if c.Port == 0 {
-		c.Port = defaults.Port
-	}
-	if c.MaxOpenConns == 0 {
-		c.MaxOpenConns = defaults.MaxOpenConns
-	}
-	if c.MaxIdleConns == 0 {
-		c.MaxIdleConns = defaults.MaxIdleConns
-	}
-	if c.ConnMaxLifetime == 0 {
-		c.ConnMaxLifetime = defaults.ConnMaxLifetime
-	}
-	if c.ConnMaxIdleTime == 0 {
-		c.ConnMaxIdleTime = defaults.ConnMaxIdleTime
-	}
-	if c.LogLevel == "" {
-		c.LogLevel = defaults.LogLevel
-	}
-	if c.SlowThreshold == 0 {
-		c.SlowThreshold = defaults.SlowThreshold
-	}
-	if c.Charset == "" {
-		c.Charset = defaults.Charset
-	}
-	if c.Loc == "" {
-		c.Loc = defaults.Loc
-	}
-	return c
-}
+// Dialector returns the gorm.io/driver/mysql adapter for this Config.
+func (c *Config) Dialector() gorm.Dialector { return mysql.Open(c.DSN()) }
