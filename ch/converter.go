@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/dailyyoga/nexgo/logger"
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
@@ -30,6 +32,8 @@ const (
 	TypeEnum
 	TypeIP
 	TypeDate
+	TypeMap
+	TypeArray
 )
 
 // Regex for parsing enum first value (handles spaces)
@@ -107,6 +111,10 @@ type TableColumn struct {
 	IsNullable     bool
 	DefaultValue   any    // Pre-parsed default value
 	EnumFirstValue string // First enum value (for Enum types)
+	// ContainerScanType is the concrete Go type the ClickHouse driver expects for
+	// Map(...)/Array(...) columns (e.g. map[string]string, []string). nil for
+	// non-container columns or when the type could not be resolved.
+	ContainerScanType reflect.Type
 }
 
 // parseColumnType parses a ClickHouse type string and returns an EnhancedColumn
@@ -128,6 +136,15 @@ func parseColumnType(name, colType, defaultValue string) TableColumn {
 	// Note: DATETIME must be checked before DATE since DATETIME contains DATE
 	baseTypeUpper := strings.ToUpper(col.BaseType)
 	switch {
+	// Map/Array must be checked first: their inner types (e.g. Map(String, Int64),
+	// Array(String)) would otherwise match the STRING/INT substring checks below
+	// and be misclassified (the original Map(String,String) -> String bug).
+	case strings.HasPrefix(baseTypeUpper, "MAP("):
+		col.ParsedType = TypeMap
+		col.ContainerScanType = resolveContainerScanType(col.BaseType, reflect.Map)
+	case strings.HasPrefix(baseTypeUpper, "ARRAY("):
+		col.ParsedType = TypeArray
+		col.ContainerScanType = resolveContainerScanType(col.BaseType, reflect.Slice)
 	case strings.Contains(baseTypeUpper, "INT"):
 		col.ParsedType = TypeInt
 	case strings.Contains(baseTypeUpper, "STRING") || strings.Contains(baseTypeUpper, "FIXEDSTRING"):
@@ -309,6 +326,20 @@ func getZeroValue(col *TableColumn) any {
 	case TypeIP:
 		// Return IPv6 zero address (::)
 		return net.IPv6zero
+	case TypeMap:
+		// Return an empty map of the exact Go type the driver expects
+		// (e.g. map[string]string{}). The driver rejects nil/string for Map columns.
+		if col.ContainerScanType != nil {
+			return reflect.MakeMap(col.ContainerScanType).Interface()
+		}
+		return nil
+	case TypeArray:
+		// Return an empty (non-nil) slice of the exact Go type the driver expects
+		// (e.g. []string{}). The driver rejects a string for Array columns.
+		if col.ContainerScanType != nil {
+			return reflect.MakeSlice(col.ContainerScanType, 0, 0).Interface()
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -1003,6 +1034,244 @@ func (c *DateConverter) Convert(val any, log logger.Logger) (any, error) {
 	}
 }
 
+// Reflect types reused when coercing container elements to the driver's expected types.
+var (
+	timeReflectType    = reflect.TypeOf(time.Time{})
+	decimalReflectType = reflect.TypeOf(decimal.Decimal{})
+	ipReflectType      = reflect.TypeOf(net.IP{})
+)
+
+// resolveContainerScanType asks the ClickHouse driver for the concrete Go type a
+// Map(...)/Array(...) column expects (e.g. Map(String,String) -> map[string]string,
+// Array(String) -> []string). wantKind guards against an unexpected resolution.
+// Returns nil if the type cannot be resolved; callers treat nil as "unknown".
+func resolveContainerScanType(baseType string, wantKind reflect.Kind) reflect.Type {
+	col, err := column.Type(baseType).Column("", time.UTC)
+	if err != nil {
+		return nil
+	}
+	st := col.ScanType()
+	if st == nil || st.Kind() != wantKind {
+		return nil
+	}
+	return st
+}
+
+// MapConverter converts a value into the concrete Go map type required by a
+// ClickHouse Map(...) column. The driver requires an exact type match
+// (e.g. map[string]string), so map[string]any is not accepted directly.
+type MapConverter struct {
+	ScanType reflect.Type // e.g. map[string]string; nil if the type was unresolved
+}
+
+func (c *MapConverter) Convert(val any, log logger.Logger) (any, error) {
+	if c.ScanType == nil {
+		return nil, nil // unresolved type; nothing safe to produce
+	}
+	return buildMap(val, c.ScanType, log).Interface(), nil
+}
+
+// ArrayConverter converts a value into the concrete Go slice type required by a
+// ClickHouse Array(...) column (e.g. []string). The driver rejects a plain string
+// for Array columns, so the value must be a real slice of the expected type.
+type ArrayConverter struct {
+	ScanType reflect.Type // e.g. []string; nil if the type was unresolved
+}
+
+func (c *ArrayConverter) Convert(val any, log logger.Logger) (any, error) {
+	if c.ScanType == nil {
+		return nil, nil // unresolved type; nothing safe to produce
+	}
+	return buildSlice(val, c.ScanType, log).Interface(), nil
+}
+
+// buildMap builds a reflect map of mapType, converting each key/value of the input
+// into the driver-expected element types. Unparseable input yields an empty map
+// (consistent with getZeroValue).
+func buildMap(val any, mapType reflect.Type, log logger.Logger) reflect.Value {
+	result := reflect.MakeMap(mapType)
+	src, ok := normalizeMapInput(val)
+	if !ok {
+		return result
+	}
+	keyType, valType := mapType.Key(), mapType.Elem()
+	iter := src.MapRange()
+	for iter.Next() {
+		k := convertElem(iter.Key().Interface(), keyType, log)
+		v := convertElem(iter.Value().Interface(), valType, log)
+		if !k.IsValid() || !v.IsValid() {
+			continue
+		}
+		result.SetMapIndex(k, v)
+	}
+	return result
+}
+
+// buildSlice builds a reflect slice of sliceType, converting each element of the
+// input into the driver-expected element type. Unparseable input yields an empty
+// (non-nil) slice (consistent with getZeroValue).
+func buildSlice(val any, sliceType reflect.Type, log logger.Logger) reflect.Value {
+	src, ok := normalizeSliceInput(val)
+	if !ok {
+		return reflect.MakeSlice(sliceType, 0, 0)
+	}
+	n := src.Len()
+	elemType := sliceType.Elem()
+	result := reflect.MakeSlice(sliceType, 0, n)
+	for i := 0; i < n; i++ {
+		e := convertElem(src.Index(i).Interface(), elemType, log)
+		if !e.IsValid() {
+			e = reflect.Zero(elemType)
+		}
+		result = reflect.Append(result, e)
+	}
+	return result
+}
+
+// normalizeMapInput turns a value into a reflect.Value of Kind Map that can be
+// ranged over. It accepts Go maps directly and decodes JSON-encoded objects
+// (string/[]byte), which is how upstream sometimes serializes map columns.
+func normalizeMapInput(val any) (reflect.Value, bool) {
+	switch v := val.(type) {
+	case nil:
+		return reflect.Value{}, false
+	case string:
+		return decodeJSON([]byte(v), reflect.Map)
+	case []byte:
+		return decodeJSON(v, reflect.Map)
+	}
+	rv := derefValue(reflect.ValueOf(val))
+	if rv.IsValid() && rv.Kind() == reflect.Map {
+		return rv, true
+	}
+	return reflect.Value{}, false
+}
+
+// normalizeSliceInput turns a value into a reflect.Value of Kind Slice/Array that
+// can be indexed. It accepts Go slices/arrays directly and decodes JSON-encoded
+// arrays from a string. A bare string is treated as JSON, never as a byte slice.
+func normalizeSliceInput(val any) (reflect.Value, bool) {
+	switch v := val.(type) {
+	case nil:
+		return reflect.Value{}, false
+	case string:
+		return decodeJSON([]byte(v), reflect.Slice)
+	}
+	rv := derefValue(reflect.ValueOf(val))
+	if rv.IsValid() && (rv.Kind() == reflect.Slice || rv.Kind() == reflect.Array) {
+		return rv, true
+	}
+	return reflect.Value{}, false
+}
+
+// derefValue unwraps pointers and interfaces; returns an invalid Value for nil.
+func derefValue(rv reflect.Value) reflect.Value {
+	for rv.IsValid() && (rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface) {
+		if rv.IsNil() {
+			return reflect.Value{}
+		}
+		rv = rv.Elem()
+	}
+	return rv
+}
+
+// decodeJSON parses JSON bytes into a generic value and returns it as a
+// reflect.Value when its kind matches wantKind (Map -> object, Slice -> array).
+func decodeJSON(b []byte, wantKind reflect.Kind) (reflect.Value, bool) {
+	if len(b) == 0 {
+		return reflect.Value{}, false
+	}
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil || v == nil {
+		return reflect.Value{}, false
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != wantKind {
+		return reflect.Value{}, false
+	}
+	return rv, true
+}
+
+// convertElem coerces a single container element into the target Go type expected
+// by the driver, recursing for Nullable (pointer) and nested container types and
+// reusing the scalar converters for leaf values.
+func convertElem(val any, target reflect.Type, log logger.Logger) reflect.Value {
+	// Nullable element types surface as pointers; allocate and fill the pointee.
+	if target.Kind() == reflect.Ptr {
+		elem := convertElem(val, target.Elem(), log)
+		if !elem.IsValid() {
+			return reflect.Zero(target)
+		}
+		ptr := reflect.New(target.Elem())
+		ptr.Elem().Set(elem)
+		return ptr
+	}
+
+	// Leaf scalar (string/int/float/bool/time/decimal/ip).
+	if conv := scalarConverterForType(target); conv != nil {
+		converted, err := conv.Convert(val, log)
+		if err != nil {
+			return reflect.Zero(target)
+		}
+		return coerceTo(converted, target)
+	}
+
+	// Nested containers.
+	switch target.Kind() {
+	case reflect.Map:
+		return buildMap(val, target, log)
+	case reflect.Slice:
+		return buildSlice(val, target, log)
+	}
+
+	return coerceTo(val, target)
+}
+
+// coerceTo converts a Go value to the target reflect.Type via assignment or a
+// numeric/kind conversion, falling back to the type's zero value.
+func coerceTo(val any, target reflect.Type) reflect.Value {
+	rv := reflect.ValueOf(val)
+	if !rv.IsValid() {
+		return reflect.Zero(target)
+	}
+	if rv.Type().AssignableTo(target) {
+		return rv
+	}
+	if rv.Type().ConvertibleTo(target) {
+		return rv.Convert(target)
+	}
+	return reflect.Zero(target)
+}
+
+// scalarConverterForType selects a scalar converter based on the target Go type.
+// Returns nil for non-leaf types (nested maps/arrays), in which case the caller
+// recurses or relies on assignable/convertible coercion.
+func scalarConverterForType(t reflect.Type) ValueConverter {
+	switch t.Kind() {
+	case reflect.String:
+		return stringConverter
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return intConverter
+	case reflect.Float32, reflect.Float64:
+		return floatConverter
+	case reflect.Bool:
+		return boolConverter
+	case reflect.Struct:
+		switch t {
+		case timeReflectType:
+			return dateTimeConverter
+		case decimalReflectType:
+			return decimalConverter
+		}
+	case reflect.Slice:
+		if t == ipReflectType {
+			return ipConverter
+		}
+	}
+	return nil
+}
+
 // getConverter returns the appropriate converter for a column type
 // Uses singleton instances for better performance
 func getConverter(col *TableColumn) ValueConverter {
@@ -1028,6 +1297,12 @@ func getConverter(col *TableColumn) ValueConverter {
 		return &EnumConverter{FirstValue: col.EnumFirstValue}
 	case TypeIP:
 		return ipConverter
+	case TypeMap:
+		// Per-column converter: carries the concrete target map type.
+		return &MapConverter{ScanType: col.ContainerScanType}
+	case TypeArray:
+		// Per-column converter: carries the concrete target slice type.
+		return &ArrayConverter{ScanType: col.ContainerScanType}
 	default:
 		return stringConverter // fallback to string
 	}
