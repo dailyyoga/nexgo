@@ -92,6 +92,18 @@ Periodically syncing cache with automatic retry logic, and Redis client wrapper.
 
 [View documentation →](./cache/README.md)
 
+### [dlq](./dlq) - Dead-Letter Recorder
+
+Generic, best-effort dead-letter recorder backed by Kafka, free of any business semantics.
+
+- Non-blocking `Record` that never disturbs the main data flow
+- Drop-on-full with a dropped counter for `/metrics` and alerting
+- Degrade-to-log on marshal error, over-cap payload, or produce failure
+- Byte-size safety cap on top of the business layer's own truncation
+- Dedicated, isolated Kafka producer plus a no-op recorder when disabled
+
+[View documentation →](./dlq/README.md)
+
 ## Installation
 
 ```bash
@@ -367,6 +379,35 @@ pipe := rdb.Unwrap().Pipeline()
 pipe.Incr(ctx, "counter")
 pipe.Expire(ctx, "counter", time.Hour)
 pipe.Exec(ctx)
+```
+
+### DLQ
+
+```go
+import (
+    "github.com/dailyyoga/nexgo/dlq"
+    "github.com/dailyyoga/nexgo/kafka"
+    "github.com/dailyyoga/nexgo/logger"
+)
+
+log, _ := logger.New(nil)
+
+// The business layer implements Payload (owns the wire schema and key)
+type failedEvent struct{ Service, RawData string }
+
+func (e failedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
+func (e failedEvent) Key() string              { return e.Service }
+func (e failedEvent) LogFields() []zap.Field   { return []zap.Field{zap.String("service", e.Service)} }
+
+// Create a kafka-backed recorder (or dlq.NewNoopRecorder() when disabled)
+recorder, _ := dlq.NewKafkaRecorder(log, &dlq.Config{
+    Topic:    "atlas-dead-letter",
+    Producer: &kafka.ProducerConfig{Brokers: []string{"localhost:9092"}},
+})
+defer recorder.Close() // drains the buffer before releasing the producer
+
+// Record never blocks and never returns an error
+recorder.Record(ctx, failedEvent{Service: "ingest", RawData: "{...}"})
 ```
 
 ## Dependencies

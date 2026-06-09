@@ -92,6 +92,18 @@
 
 [查看文档 →](./cache/README.md)
 
+### [dlq](./dlq) - 死信记录器
+
+基于 Kafka 的通用尽力而为死信记录器，不包含任何业务语义。
+
+- 非阻塞的 `Record`，绝不干扰主数据流
+- 缓冲区满时丢弃并计数，便于 `/metrics` 监控和告警
+- 序列化失败、超出大小上限或投递失败时降级为日志
+- 在业务层自身截断之上提供字节大小安全上限
+- 专用、隔离的 Kafka 生产者，并在禁用时提供空操作记录器
+
+[查看文档 →](./dlq/README.md)
+
 ## 安装
 
 ```bash
@@ -367,6 +379,35 @@ pipe := rdb.Unwrap().Pipeline()
 pipe.Incr(ctx, "counter")
 pipe.Expire(ctx, "counter", time.Hour)
 pipe.Exec(ctx)
+```
+
+### DLQ 死信队列
+
+```go
+import (
+    "github.com/dailyyoga/nexgo/dlq"
+    "github.com/dailyyoga/nexgo/kafka"
+    "github.com/dailyyoga/nexgo/logger"
+)
+
+log, _ := logger.New(nil)
+
+// 业务层实现 Payload（拥有 wire 协议结构和分区键）
+type failedEvent struct{ Service, RawData string }
+
+func (e failedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
+func (e failedEvent) Key() string              { return e.Service }
+func (e failedEvent) LogFields() []zap.Field   { return []zap.Field{zap.String("service", e.Service)} }
+
+// 创建基于 kafka 的记录器（禁用时使用 dlq.NewNoopRecorder()）
+recorder, _ := dlq.NewKafkaRecorder(log, &dlq.Config{
+    Topic:    "atlas-dead-letter",
+    Producer: &kafka.ProducerConfig{Brokers: []string{"localhost:9092"}},
+})
+defer recorder.Close() // 释放生产者前先排空缓冲区
+
+// Record 永不阻塞，也永不返回错误
+recorder.Record(ctx, failedEvent{Service: "ingest", RawData: "{...}"})
 ```
 
 ## 依赖
