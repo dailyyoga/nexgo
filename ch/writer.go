@@ -364,6 +364,11 @@ func (w *defaultWriter) doBatchInsert(ctx context.Context, table TableName, rows
 			values[i] = w.getColumnValue(valueMap, &columns[i])
 		}
 		if err := batch.Append(values...); err != nil {
+			w.logger.Warn("batch append row failed",
+				zap.String("table", string(table)),
+				zap.Any("row_data", valueMap),
+				zap.Error(err),
+			)
 			return ErrInsert(table, err)
 		}
 	}
