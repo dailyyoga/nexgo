@@ -125,12 +125,16 @@ func parseColumnType(name, colType, defaultValue string) TableColumn {
 		BaseType:     colType,
 	}
 
-	// Check if nullable
-	if strings.HasPrefix(colType, "Nullable(") {
-		col.IsNullable = true
-		col.BaseType = strings.TrimPrefix(colType, "Nullable(")
-		col.BaseType = strings.TrimSuffix(col.BaseType, ")")
-	}
+	// Unwrap transparent type modifiers to expose the underlying type.
+	// ClickHouse nests these as LowCardinality(Nullable(T)): LowCardinality only
+	// affects on-disk encoding (not the value), while Nullable decides whether an
+	// absent value must be written as NULL instead of a zero value. Strip both, in
+	// any nesting order, so BaseType and IsNullable reflect the inner type.
+	//
+	// Checking only the "Nullable(" prefix missed LowCardinality(Nullable(T)): the
+	// column was treated as non-nullable, so a missing value was written as the zero
+	// value ("" for String, 0 for Int, ...) instead of NULL.
+	col.BaseType = unwrapTypeModifiers(colType, &col.IsNullable)
 
 	// Parse type category - ordered by frequency (most common first)
 	// Note: DATETIME must be checked before DATE since DATETIME contains DATE
@@ -174,6 +178,29 @@ func parseColumnType(name, colType, defaultValue string) TableColumn {
 	}
 
 	return col
+}
+
+// unwrapTypeModifiers strips the transparent LowCardinality(...) and Nullable(...)
+// wrappers from a ClickHouse type string and returns the underlying type. If a
+// Nullable(...) wrapper is present at any level, *nullable is set to true.
+//
+// Only these two scalar modifiers are unwrapped; container/composite types
+// (Map, Array, Tuple, ...) and their inner types are returned untouched so the
+// caller can classify them by their outer prefix. Each wrapper contributes
+// exactly one trailing ")", so trimming a single suffix per level is correct
+// (e.g. Nullable(DateTime64(3)) -> DateTime64(3)).
+func unwrapTypeModifiers(colType string, nullable *bool) string {
+	for {
+		switch {
+		case strings.HasPrefix(colType, "LowCardinality("):
+			colType = strings.TrimSuffix(strings.TrimPrefix(colType, "LowCardinality("), ")")
+		case strings.HasPrefix(colType, "Nullable("):
+			*nullable = true
+			colType = strings.TrimSuffix(strings.TrimPrefix(colType, "Nullable("), ")")
+		default:
+			return colType
+		}
+	}
 }
 
 // parseFirstEnumValue extracts the first enum value from an Enum type definition
