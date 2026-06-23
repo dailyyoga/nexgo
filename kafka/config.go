@@ -174,6 +174,18 @@ type ProducerConfig struct {
 	// Max retries for kafka producer
 	// default: 3
 	MaxRetries int `mapstructure:"max_retries"`
+
+	// OnDeliveryFailure is an optional callback invoked when a produced message
+	// fails delivery (the async delivery report carries an error after retries
+	// are exhausted). Produce is fire-and-forget, so without this callback such
+	// failures are only logged and the message is silently lost — set it to route
+	// failed messages to a dead-letter sink.
+	//
+	// It is a code-only field (set programmatically, not via config files), so it
+	// is excluded from mapstructure. nil keeps the legacy behavior (log only).
+	// The callback runs in its own panic-recovered goroutine, so it never blocks
+	// or crashes the delivery-report loop; it must be safe for concurrent use.
+	OnDeliveryFailure func(msg *Message, err error) `mapstructure:"-"`
 }
 
 func DefaultProducerConfig() *ProducerConfig {

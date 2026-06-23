@@ -8,6 +8,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/dailyyoga/nexgo/logger"
+	"github.com/dailyyoga/nexgo/routine"
 	"go.uber.org/zap"
 )
 
@@ -15,6 +16,10 @@ type defaultProducer struct {
 	logger logger.Logger
 
 	p *kafka.Producer
+
+	// onDeliveryFailure, when set, is invoked for each message that fails delivery
+	// (see ProducerConfig.OnDeliveryFailure). nil keeps the log-only behavior.
+	onDeliveryFailure func(msg *Message, err error)
 
 	wg   sync.WaitGroup
 	done chan struct{}
@@ -62,9 +67,10 @@ func NewProducer(log logger.Logger, config *ProducerConfig) (Producer, error) {
 	}
 
 	kp := &defaultProducer{
-		p:      producer,
-		logger: log,
-		done:   make(chan struct{}),
+		p:                 producer,
+		logger:            log,
+		onDeliveryFailure: config.OnDeliveryFailure,
+		done:              make(chan struct{}),
 	}
 
 	kp.wg.Add(1)
@@ -90,6 +96,7 @@ func (kp *defaultProducer) handleDeliveryReports() {
 						zap.Error(ev.TopicPartition.Error),
 						zap.String("topic", *ev.TopicPartition.Topic),
 					)
+					kp.notifyDeliveryFailure(ev)
 				} else {
 					kp.logger.Debug("message delivered",
 						zap.String("topic", *ev.TopicPartition.Topic),
@@ -112,6 +119,48 @@ func (kp *defaultProducer) handleDeliveryReports() {
 			}
 		}
 	}
+}
+
+// notifyDeliveryFailure invokes the optional OnDeliveryFailure callback for a
+// failed delivery report. It runs the callback in a panic-recovered goroutine so
+// untrusted caller code can neither block the delivery-report loop (which would
+// stall all subsequent reports) nor crash the producer.
+func (kp *defaultProducer) notifyDeliveryFailure(ev *kafka.Message) {
+	if kp.onDeliveryFailure == nil {
+		return
+	}
+
+	msg := fromKafkaMessage(ev)
+	err := ev.TopicPartition.Error
+	routine.Go(kp.logger, func() {
+		kp.onDeliveryFailure(msg, err)
+	})
+}
+
+// fromKafkaMessage converts a confluent message back into the public Message type
+// so the callback never sees the underlying confluent-kafka-go types. Topic is
+// copied (the confluent pointer is owned by librdkafka and reused).
+func fromKafkaMessage(ev *kafka.Message) *Message {
+	msg := &Message{
+		Value:     ev.Value,
+		Key:       ev.Key,
+		Timestamp: ev.Timestamp,
+		TopicPartition: TopicPartition{
+			Partition: ev.TopicPartition.Partition,
+			Offset:    Offset(ev.TopicPartition.Offset),
+		},
+	}
+	if ev.TopicPartition.Topic != nil {
+		topic := *ev.TopicPartition.Topic
+		msg.TopicPartition.Topic = &topic
+	}
+	if len(ev.Headers) > 0 {
+		msg.Headers = make([]Header, 0, len(ev.Headers))
+		for _, h := range ev.Headers {
+			msg.Headers = append(msg.Headers, Header{Key: h.Key, Value: h.Value})
+		}
+	}
+	return msg
 }
 
 // Produce produces a message to the kafka topic
