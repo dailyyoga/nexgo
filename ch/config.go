@@ -37,6 +37,14 @@ type WriterConfig struct {
 	// MaxRetries is the maximum number of retries for transient errors during batch insert.
 	// Default is 3. Set to 0 to use default.
 	MaxRetries int `mapstructure:"max_retries"`
+	// OnPermanentFailure is invoked when a batch of rows exhausts all retries and
+	// is about to be dropped (optional). When nil the old behaviour is preserved
+	// (log only, then drop the whole batch; see writer.go flush()).
+	// It has no mapstructure tag on purpose: it is a function injected by code at
+	// construction time, not loaded from YAML, so viper/mapstructure ignores it.
+	// The callback must be non-blocking and must not let a panic escape; callers
+	// should dump the failed rows to a DLQ (or other side channel) inside it.
+	OnPermanentFailure func(table TableName, rows []Table, err error) `mapstructure:"-"`
 }
 
 func DefaultConfig() *Config {

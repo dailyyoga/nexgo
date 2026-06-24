@@ -306,7 +306,13 @@ func (w *defaultWriter) flush(buffer map[TableName][]Table) {
 				zap.Error(lastErr),
 			)
 			failedRows += len(rows)
-			// @TODO: fallback strategy, e.g. send failed rows to a DLQ (Dead Letter Queue) for manual recovery
+			// fallback strategy: hand the permanently-failed rows to the optional
+			// callback (e.g. dump them into a DLQ for manual recovery). Called
+			// synchronously so the rows are enqueued before flush returns — see
+			// safeOnPermanentFailure for why this must not be a goroutine.
+			if w.config.WriterConfig.OnPermanentFailure != nil {
+				w.safeOnPermanentFailure(table, rows, lastErr)
+			}
 		}
 	}
 
@@ -315,6 +321,31 @@ func (w *defaultWriter) flush(buffer map[TableName][]Table) {
 		zap.Int("success_rows", successRows),
 		zap.Int("failed_rows", failedRows),
 	)
+}
+
+// safeOnPermanentFailure invokes the configured OnPermanentFailure callback
+// synchronously, recovering from any panic so a misbehaving callback cannot
+// stall or crash the flush loop.
+//
+// The call is intentionally synchronous (not wrapped in a goroutine): the
+// downstream DLQ recorder's Record is already non-blocking, and an async call
+// would open a shutdown race — clickhouseClient.Close() triggers the final
+// flush and returns immediately, so if the callback were still pending in its
+// own goroutine, dlqRecorder.Close() could drain the recorder before the
+// failed rows were ever enqueued. Synchronous invocation guarantees every
+// Record is enqueued before flush (and thus Close) returns.
+func (w *defaultWriter) safeOnPermanentFailure(table TableName, rows []Table, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.Error("OnPermanentFailure callback panicked",
+				zap.String("table", string(table)),
+				zap.Int("rows", len(rows)),
+				zap.Any("panic", r),
+			)
+		}
+	}()
+
+	w.config.WriterConfig.OnPermanentFailure(table, rows, err)
 }
 
 // batchInsert batch insert data to clickhouse.
