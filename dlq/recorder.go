@@ -21,9 +21,13 @@ type kafkaRecorder struct {
 	done chan struct{}
 	wg   sync.WaitGroup
 
-	dropped atomic.Uint64
-	closed  atomic.Bool
+	dropped       atomic.Uint64
+	produceErrors atomic.Uint64
+	closed        atomic.Bool
 }
+
+// kafkaRecorder exposes its infra counters via the optional Stats interface.
+var _ Stats = (*kafkaRecorder)(nil)
 
 // NewKafkaRecorder creates a Recorder that delivers payloads to cfg.Topic via a
 // dedicated kafka producer it creates and owns. All the tricky runtime behavior
@@ -96,6 +100,17 @@ func (r *kafkaRecorder) Record(_ context.Context, p Payload) {
 
 func (r *kafkaRecorder) Dropped() uint64 { return r.dropped.Load() }
 
+// ProduceErrors returns the total number of records that could not be produced
+// because of a marshal error or a producer error (capacity-related drops are
+// counted by Dropped instead).
+func (r *kafkaRecorder) ProduceErrors() uint64 { return r.produceErrors.Load() }
+
+// BufferLen returns the number of records currently buffered awaiting delivery.
+func (r *kafkaRecorder) BufferLen() int { return len(r.ch) }
+
+// BufferCap returns the capacity of the internal buffer.
+func (r *kafkaRecorder) BufferCap() int { return cap(r.ch) }
+
 // loop drains ch until done is closed, then drains whatever is still buffered.
 func (r *kafkaRecorder) loop() {
 	defer r.wg.Done()
@@ -121,6 +136,7 @@ func (r *kafkaRecorder) loop() {
 func (r *kafkaRecorder) produce(p Payload) {
 	data, err := p.Marshal()
 	if err != nil {
+		r.produceErrors.Add(1)
 		r.logger.Error("dlq marshal failed, dropping failed record",
 			append(p.LogFields(), zap.Error(err))...)
 		return
@@ -147,6 +163,7 @@ func (r *kafkaRecorder) produce(p Payload) {
 		},
 	}
 	if err := r.producer.Produce(context.Background(), msg); err != nil {
+		r.produceErrors.Add(1)
 		// last line of defense: never lose the record entirely, fall back to log
 		r.logger.Error("dlq produce failed, falling back to log",
 			append(p.LogFields(), zap.Error(err))...)

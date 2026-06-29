@@ -48,3 +48,24 @@ type Recorder interface {
 	// releases the underlying producer. It is idempotent.
 	Close() error
 }
+
+// Stats exposes the recorder's infra counters for scrape-time monitoring. It is
+// intentionally separate from Recorder and OPTIONAL: defining it here keeps the
+// Recorder interface (and every existing implementation) unchanged, while the
+// kafkaRecorder additionally implements Stats. The prometheus adapter in
+// nexgo/metrics reads these accessors live at scrape time.
+//
+// Callers typically obtain it via a type assertion on a Recorder:
+//
+//	if s, ok := rec.(dlq.Stats); ok { metrics.RegisterDLQ(reg, s) }
+type Stats interface {
+	// Dropped returns the total records dropped (buffer full or over byte cap).
+	Dropped() uint64
+	// ProduceErrors returns the total records that failed to be produced
+	// (marshal or producer error).
+	ProduceErrors() uint64
+	// BufferLen returns the number of records currently buffered.
+	BufferLen() int
+	// BufferCap returns the buffer capacity.
+	BufferCap() int
+}

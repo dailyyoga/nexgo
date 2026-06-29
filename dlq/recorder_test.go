@@ -62,6 +62,14 @@ func (p *blockingProducer) Produce(_ context.Context, msg *kafka.Message) error 
 }
 func (p *blockingProducer) Close() error { return nil }
 
+// failingProducer always fails Produce, to exercise the produce-error path.
+type failingProducer struct{}
+
+func (failingProducer) Produce(context.Context, *kafka.Message) error {
+	return errors.New("produce failed")
+}
+func (failingProducer) Close() error { return nil }
+
 type testPayload struct {
 	data       []byte
 	marshalErr error
@@ -160,6 +168,77 @@ func TestRecorder_CloseIsIdempotent(t *testing.T) {
 	}
 	// recording after close must not panic
 	r.Record(context.Background(), testPayload{data: []byte("late")})
+}
+
+// TestRecorder_ProduceErrorsCounter verifies a producer error increments
+// ProduceErrors (not Dropped): Close drains the buffer, so both records are
+// produced and both fail.
+func TestRecorder_ProduceErrorsCounter(t *testing.T) {
+	r := newKafkaRecorder(noopLogger{}, failingProducer{}, "t", 100, 1<<20)
+
+	r.Record(context.Background(), testPayload{data: []byte("a")})
+	r.Record(context.Background(), testPayload{data: []byte("b")})
+	if err := r.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if pe := r.ProduceErrors(); pe != 2 {
+		t.Fatalf("ProduceErrors = %d, want 2", pe)
+	}
+	if d := r.Dropped(); d != 0 {
+		t.Fatalf("Dropped = %d, want 0 (produce errors are not drops)", d)
+	}
+}
+
+// TestRecorder_MarshalErrorCountsAsProduceError verifies a marshal failure is
+// counted under ProduceErrors (and not Dropped).
+func TestRecorder_MarshalErrorCountsAsProduceError(t *testing.T) {
+	fp := &recordingProducer{}
+	r := newKafkaRecorder(noopLogger{}, fp, "t", 100, 1<<20)
+
+	r.Record(context.Background(), testPayload{marshalErr: errors.New("boom")})
+	if err := r.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if pe := r.ProduceErrors(); pe != 1 {
+		t.Fatalf("ProduceErrors = %d, want 1", pe)
+	}
+	if d := r.Dropped(); d != 0 {
+		t.Fatalf("Dropped = %d, want 0", d)
+	}
+}
+
+// TestRecorder_BufferFullAccessors verifies BufferCap/BufferLen and that a full
+// buffer drops further records while BufferLen reports the capacity.
+func TestRecorder_BufferFullAccessors(t *testing.T) {
+	fp := &blockingProducer{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	r := newKafkaRecorder(noopLogger{}, fp, "t", 2, 1<<20)
+
+	if got := r.BufferCap(); got != 2 {
+		t.Fatalf("BufferCap = %d, want 2", got)
+	}
+
+	// first record gets pulled by the loop and blocks inside Produce
+	r.Record(context.Background(), testPayload{data: []byte("a")})
+	<-fp.entered // loop parked inside produce("a"); buffer (cap 2) is empty
+
+	r.Record(context.Background(), testPayload{data: []byte("b")}) // buffered
+	r.Record(context.Background(), testPayload{data: []byte("c")}) // buffered (full)
+
+	if l, c := r.BufferLen(), r.BufferCap(); l != c {
+		t.Fatalf("buffer not full: BufferLen=%d BufferCap=%d, want equal", l, c)
+	}
+
+	r.Record(context.Background(), testPayload{data: []byte("d")}) // dropped
+	if d := r.Dropped(); d != 1 {
+		t.Fatalf("Dropped = %d, want 1", d)
+	}
+
+	close(fp.release) // let everything drain
+	if err := r.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 }
 
 func TestNoopRecorder(t *testing.T) {
