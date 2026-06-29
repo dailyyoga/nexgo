@@ -153,6 +153,18 @@ func (c *defaultClient) Exec(ctx context.Context, query string, args ...any) err
 	return nil
 }
 
+// Ping verifies connectivity to ClickHouse, returning ErrConnectionClosed if the
+// client has been closed.
+func (c *defaultClient) Ping(ctx context.Context) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.closed {
+		return ErrConnectionClosed
+	}
+	return c.conn.Ping(ctx)
+}
+
 // Close closes the client and all associated resources
 func (c *defaultClient) Close() error {
 	c.mu.Lock()

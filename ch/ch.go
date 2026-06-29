@@ -31,6 +31,10 @@ type Client interface {
 	QueryRow(ctx context.Context, query string, args ...any) driver.Row
 	// Exec executes a query without returning any rows (for INSERT, CREATE, ALTER, etc.)
 	Exec(ctx context.Context, query string, args ...any) error
+	// Ping verifies connectivity to ClickHouse. It returns an error if the
+	// client is closed or the underlying connection is unhealthy. Useful for
+	// health checks.
+	Ping(ctx context.Context) error
 	// Close closes the client and all associated resources
 	Close() error
 }
