@@ -19,6 +19,10 @@ type consumeInstance struct {
 	name   string
 	c      *kafka.Consumer
 
+	// hook, when non-nil, receives consume/lag metrics events. Copied from
+	// config.MetricsHook at construction.
+	hook ConsumerMetricsHook
+
 	closed atomic.Bool
 }
 
@@ -43,6 +47,7 @@ func newConsumeInstance(name string, config *ConsumerConfig, log logger.Logger) 
 		name:   name,
 		c:      consumer,
 		logger: log,
+		hook:   config.MetricsHook,
 	}
 
 	return c, nil
@@ -111,11 +116,29 @@ func (c *consumeInstance) consumeLoop(ctx context.Context, handler ConsumerMsgHa
 				if e.Error != nil {
 					c.logger.Error("failed to commit offsets", zap.Error(e.Error))
 				}
+			case *kafka.Stats:
+				// Only parse the (non-trivial) statistics JSON when a hook is
+				// configured to consume the lag; otherwise this is a no-op and
+				// behavior matches the legacy code path.
+				if c.hook != nil {
+					for _, lag := range parseStatsLag(e.String()) {
+						c.hook.OnLag(c.config.GroupID, lag.Topic, lag.Partition, lag.Lag)
+					}
+				}
 			default:
 				c.logger.Debug("received unknown event", zap.String("type", fmt.Sprintf("%T", e)))
 			}
 		}
 	}
+}
+
+// topicName safely dereferences the (librdkafka-owned) topic pointer, returning
+// "" when it is nil so metrics hooks never panic on an unexpected message.
+func topicName(msg *kafka.Message) string {
+	if msg.TopicPartition.Topic != nil {
+		return *msg.TopicPartition.Topic
+	}
+	return ""
 }
 
 // just a wrapper for kafka.Message to Message
@@ -143,24 +166,40 @@ func toMessage(msg *kafka.Message) *Message {
 }
 
 // handlerMessage is the function for handling a single message from kafka
-func (c *consumeInstance) handlerMessage(ctx context.Context, msg *kafka.Message, handler ConsumerMsgHandler) error {
+func (c *consumeInstance) handlerMessage(ctx context.Context, msg *kafka.Message, handler ConsumerMsgHandler) (err error) {
 	startTime := time.Now()
 
-	var runError error
+	// Report the consume outcome (final error + total latency) exactly once,
+	// covering the success, handler-failure and commit-failure paths via the
+	// named return. Registered only when a hook is configured so the no-hook
+	// path is unchanged.
+	if c.hook != nil {
+		defer func() {
+			c.hook.OnConsume(
+				c.config.GroupID,
+				topicName(msg),
+				msg.TopicPartition.Partition,
+				err,
+				time.Since(startTime),
+			)
+		}()
+	}
+
 	for i := 1; i <= c.config.MaxRetries; i++ {
-		if runError = handler(ctx, toMessage(msg)); runError == nil {
+		if err = handler(ctx, toMessage(msg)); err == nil {
 			break
 		}
 	}
 
-	if runError != nil {
-		return runError
+	if err != nil {
+		return err
 	}
 
 	// manual commit if auto commit is disabled
 	if !c.config.EnableAutoCommit {
-		if _, err := c.c.CommitMessage(msg); err != nil {
-			return ErrCommit(err)
+		if _, commitErr := c.c.CommitMessage(msg); commitErr != nil {
+			err = ErrCommit(commitErr)
+			return err
 		}
 	}
 

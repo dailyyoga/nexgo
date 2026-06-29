@@ -21,6 +21,10 @@ type defaultProducer struct {
 	// (see ProducerConfig.OnDeliveryFailure). nil keeps the log-only behavior.
 	onDeliveryFailure func(msg *Message, err error)
 
+	// metricsHook, when set, receives produce/delivery metrics events
+	// (see ProducerConfig.MetricsHook). nil disables collection.
+	metricsHook ProducerMetricsHook
+
 	wg   sync.WaitGroup
 	done chan struct{}
 }
@@ -70,6 +74,7 @@ func NewProducer(log logger.Logger, config *ProducerConfig) (Producer, error) {
 		p:                 producer,
 		logger:            log,
 		onDeliveryFailure: config.OnDeliveryFailure,
+		metricsHook:       config.MetricsHook,
 		done:              make(chan struct{}),
 	}
 
@@ -97,12 +102,14 @@ func (kp *defaultProducer) handleDeliveryReports() {
 						zap.String("topic", *ev.TopicPartition.Topic),
 					)
 					kp.notifyDeliveryFailure(ev)
+					kp.notifyDelivery(ev, ev.TopicPartition.Error)
 				} else {
 					kp.logger.Debug("message delivered",
 						zap.String("topic", *ev.TopicPartition.Topic),
 						zap.Int32("partition", ev.TopicPartition.Partition),
 						zap.Int64("offset", int64(ev.TopicPartition.Offset)),
 					)
+					kp.notifyDelivery(ev, nil)
 				}
 			case kafka.Error:
 				kp.logger.Error("kafka producer error",
@@ -135,6 +142,32 @@ func (kp *defaultProducer) notifyDeliveryFailure(ev *kafka.Message) {
 	routine.Go(kp.logger, func() {
 		kp.onDeliveryFailure(msg, err)
 	})
+}
+
+// notifyDelivery reports a delivery outcome to the metrics hook. The delivery
+// latency is derived from the produce timestamp stashed in Opaque by Produce;
+// when Opaque is absent or not a time.Time the latency is reported as zero so
+// the adapter can degrade to count-only. nil hook is a no-op.
+//
+// Unlike notifyDeliveryFailure this runs the hook inline (no goroutine): the
+// metrics hook is contractually non-blocking, and spawning a goroutine per
+// delivery report would be prohibitively expensive at produce throughput.
+func (kp *defaultProducer) notifyDelivery(ev *kafka.Message, err error) {
+	if kp.metricsHook == nil {
+		return
+	}
+
+	var topic string
+	if ev.TopicPartition.Topic != nil {
+		topic = *ev.TopicPartition.Topic
+	}
+
+	var latency time.Duration
+	if start, ok := ev.Opaque.(time.Time); ok {
+		latency = time.Since(start)
+	}
+
+	kp.metricsHook.OnDelivery(topic, err, latency)
 }
 
 // fromKafkaMessage converts a confluent message back into the public Message type
@@ -178,6 +211,9 @@ func (kp *defaultProducer) Produce(ctx context.Context, msg *Message) error {
 			Partition: kafka.PartitionAny,
 		},
 		Value: msg.Value,
+		// Stash the produce time so the delivery-report handler can compute
+		// delivery latency for the metrics hook. Opaque is not used elsewhere.
+		Opaque: time.Now(),
 	}
 
 	if msg.TopicPartition.Partition != PartitionAny {

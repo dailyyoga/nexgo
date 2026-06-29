@@ -51,6 +51,18 @@ type ConsumerConfig struct {
 
 	// Debug Model - enable consumer debug logs
 	Debug bool `mapstructure:"debug"`
+
+	// StatisticsIntervalMs sets librdkafka's statistics.interval.ms. When > 0
+	// the consumer periodically emits *kafka.Stats events that carry per-partition
+	// consumer lag; 0 (the default) disables statistics entirely. Lag is only
+	// parsed and reported when MetricsHook is also set.
+	StatisticsIntervalMs int `mapstructure:"statistics_interval_ms"`
+
+	// MetricsHook, when set, receives consume/lag observability events. It is a
+	// code-only field (set programmatically, not via config files) and is
+	// excluded from mapstructure. nil keeps the legacy behavior (no collection).
+	// See ConsumerMetricsHook for the concurrency/non-blocking contract.
+	MetricsHook ConsumerMetricsHook `mapstructure:"-"`
 }
 
 func DefaultConsumerConfig() *ConsumerConfig {
@@ -116,6 +128,10 @@ func (c *ConsumerConfig) BuildConfigMap() *kafka.ConfigMap {
 
 	if c.Debug {
 		_ = configMap.SetKey("debug", "consumer,cgrp,topic,fetch")
+	}
+
+	if c.StatisticsIntervalMs > 0 {
+		_ = configMap.SetKey("statistics.interval.ms", c.StatisticsIntervalMs)
 	}
 
 	return configMap
@@ -186,6 +202,13 @@ type ProducerConfig struct {
 	// The callback runs in its own panic-recovered goroutine, so it never blocks
 	// or crashes the delivery-report loop; it must be safe for concurrent use.
 	OnDeliveryFailure func(msg *Message, err error) `mapstructure:"-"`
+
+	// MetricsHook, when set, receives produce/delivery observability events. It
+	// is independent from and orthogonal to OnDeliveryFailure (which routes
+	// failed messages to a dead-letter sink): this hook only measures delivery
+	// outcomes. Code-only field, excluded from mapstructure; nil disables
+	// collection. See ProducerMetricsHook for the concurrency contract.
+	MetricsHook ProducerMetricsHook `mapstructure:"-"`
 }
 
 func DefaultProducerConfig() *ProducerConfig {
