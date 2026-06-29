@@ -1,14 +1,17 @@
-package metrics
+package kafkametrics
 
 import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/dailyyoga/nexgo/metrics"
+	dto "github.com/prometheus/client_model/go"
 )
 
-func TestKafkaMetricsRecordsSeries(t *testing.T) {
-	reg := NewRegistry(Options{})
-	km := NewKafkaMetrics(reg)
+func TestMetricsRecordsSeries(t *testing.T) {
+	reg := metrics.NewRegistry(metrics.Options{})
+	km := New(reg)
 
 	// Consume: one success, one failure.
 	km.OnConsume("cg", "t1", 0, nil, 5*time.Millisecond)
@@ -46,12 +49,12 @@ func TestKafkaMetricsRecordsSeries(t *testing.T) {
 	}
 }
 
-// TestKafkaMetricsNoDurationWithoutLatency verifies the degrade-to-count path:
-// a successful delivery with zero latency (Opaque unavailable) is counted but
+// TestMetricsNoDurationWithoutLatency verifies the degrade-to-count path: a
+// successful delivery with zero latency (Opaque unavailable) is counted but
 // records no duration sample.
-func TestKafkaMetricsNoDurationWithoutLatency(t *testing.T) {
-	reg := NewRegistry(Options{})
-	km := NewKafkaMetrics(reg)
+func TestMetricsNoDurationWithoutLatency(t *testing.T) {
+	reg := metrics.NewRegistry(metrics.Options{})
+	km := New(reg)
 
 	km.OnDelivery("t2", nil, 0)
 
@@ -62,4 +65,40 @@ func TestKafkaMetricsNoDurationWithoutLatency(t *testing.T) {
 	if m := findMetric(t, reg, "atlas_kafka_produce_duration_seconds", map[string]string{"topic": "t2"}); m != nil {
 		t.Errorf("expected no produce_duration sample for t2, got %v", m)
 	}
+}
+
+// findMetric returns the first sample of family `name` whose labels are a
+// superset of `want`, or nil if none matches. It reads through the exported
+// Registry.Prometheus() gatherer so the helper needs no access to metrics
+// package internals.
+func findMetric(t *testing.T, reg *metrics.Registry, name string, want map[string]string) *dto.Metric {
+	t.Helper()
+	mfs, err := reg.Prometheus().Gather()
+	if err != nil {
+		t.Fatalf("Gather() error: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.Metric {
+			if labelsContain(m, want) {
+				return m
+			}
+		}
+	}
+	return nil
+}
+
+func labelsContain(m *dto.Metric, want map[string]string) bool {
+	got := make(map[string]string, len(m.Label))
+	for _, lp := range m.Label {
+		got[lp.GetName()] = lp.GetValue()
+	}
+	for k, v := range want {
+		if got[k] != v {
+			return false
+		}
+	}
+	return true
 }

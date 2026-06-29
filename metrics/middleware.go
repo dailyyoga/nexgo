@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"errors"
 	"strconv"
 	"time"
 
@@ -43,43 +42,25 @@ type httpMetrics struct {
 // registries each get their own set.
 func newHTTPMetrics(reg *Registry) *httpMetrics {
 	return &httpMetrics{
-		requests: registerOrExisting(reg, prometheus.NewCounterVec(prometheus.CounterOpts{
+		requests: RegisterOrExisting(reg, prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "atlas_http_requests_total",
 			Help: "Total number of HTTP requests.",
 		}, []string{"method", "route", "status"})),
-		duration: registerOrExisting(reg, prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		duration: RegisterOrExisting(reg, prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "atlas_http_request_duration_seconds",
 			Help:    "HTTP request latency in seconds.",
 			Buckets: durationBuckets,
 		}, []string{"method", "route"})),
-		inFlight: registerOrExisting(reg, prometheus.NewGauge(prometheus.GaugeOpts{
+		inFlight: RegisterOrExisting(reg, prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "atlas_http_requests_in_flight",
 			Help: "Number of HTTP requests currently being served.",
 		})),
-		responseSize: registerOrExisting(reg, prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		responseSize: RegisterOrExisting(reg, prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "atlas_http_response_size_bytes",
 			Help:    "HTTP response size in bytes.",
 			Buckets: responseSizeBuckets,
 		}, []string{"route"})),
 	}
-}
-
-// registerOrExisting registers c against reg, returning c on success. If an
-// equivalent collector is already registered (AlreadyRegisteredError), the
-// existing one is returned so repeated RED calls on the same registry share a
-// single collector. Any other registration error panics, mirroring
-// MustRegister.
-func registerOrExisting[C prometheus.Collector](reg *Registry, c C) C {
-	if err := reg.Register(c); err != nil {
-		var are prometheus.AlreadyRegisteredError
-		if errors.As(err, &are) {
-			if existing, ok := are.ExistingCollector.(C); ok {
-				return existing
-			}
-		}
-		panic(err)
-	}
-	return c
 }
 
 // RED returns a gin middleware that records the four §6.1 HTTP metrics against

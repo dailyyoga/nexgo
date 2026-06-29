@@ -6,13 +6,19 @@
 // registry" trap and lets every service decide exactly which collectors it
 // exposes. Built-in Go runtime / process collectors are opt-in via Options.
 //
-// This package is the single home for all Prometheus adapters in nexgo. Other
-// packages (kafka, dlq, ...) stay prometheus-free and only expose hooks or
-// accessors; the adapters that turn those into metrics live here, so the
-// dependency direction is always metrics -> kafka/dlq, never the reverse.
+// Prometheus adapters live close to this package but are split by dependency
+// weight. The core metrics package only depends on prometheus + gin, so any
+// service can expose HTTP RED metrics without dragging in heavyweight
+// transitive deps. Adapters that DO need such deps live in their own
+// subpackages — kafkametrics (which pulls the cgo confluent-kafka-go in via
+// nexgo/kafka) and dlqmetrics — so importing metrics alone never forces kafka
+// into a build. Source packages (kafka, dlq, ...) stay prometheus-free and only
+// expose hooks or accessors; the dependency direction is always adapter ->
+// source, never the reverse.
 package metrics
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -80,6 +86,28 @@ func (r *Registry) MustRegister(cs ...prometheus.Collector) {
 // prometheus.AlreadyRegisteredError) instead of panicking.
 func (r *Registry) Register(c prometheus.Collector) error {
 	return r.registry.Register(c)
+}
+
+// RegisterOrExisting registers c against reg, returning c on success. If an
+// equivalent collector is already registered (AlreadyRegisteredError), the
+// existing one is returned so repeated registration on the same registry shares
+// a single collector. Any other registration error panics, mirroring
+// MustRegister.
+//
+// It is exported so adapter subpackages (kafkametrics, dlqmetrics, ...) can
+// register their metric vectors with the same idempotent semantics the RED
+// middleware uses internally.
+func RegisterOrExisting[C prometheus.Collector](reg *Registry, c C) C {
+	if err := reg.Register(c); err != nil {
+		var are prometheus.AlreadyRegisteredError
+		if errors.As(err, &are) {
+			if existing, ok := are.ExistingCollector.(C); ok {
+				return existing
+			}
+		}
+		panic(err)
+	}
+	return c
 }
 
 // Handler returns the cached OpenMetrics HTTP handler for the registry.

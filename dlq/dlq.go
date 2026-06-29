@@ -53,11 +53,11 @@ type Recorder interface {
 // intentionally separate from Recorder and OPTIONAL: defining it here keeps the
 // Recorder interface (and every existing implementation) unchanged, while the
 // kafkaRecorder additionally implements Stats. The prometheus adapter in
-// nexgo/metrics reads these accessors live at scrape time.
+// nexgo/metrics/dlqmetrics reads these accessors live at scrape time.
 //
 // Callers typically obtain it via a type assertion on a Recorder:
 //
-//	if s, ok := rec.(dlq.Stats); ok { metrics.RegisterDLQ(reg, s) }
+//	if s, ok := rec.(dlq.Stats); ok { dlqmetrics.Register(reg, s) }
 type Stats interface {
 	// Dropped returns the total records dropped (buffer full or over byte cap).
 	Dropped() uint64
