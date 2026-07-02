@@ -45,6 +45,14 @@ type WriterConfig struct {
 	// The callback must be non-blocking and must not let a panic escape; callers
 	// should dump the failed rows to a DLQ (or other side channel) inside it.
 	OnPermanentFailure func(table TableName, rows []Table, err error) `mapstructure:"-"`
+	// MetricsHook, when set, receives per-table flush observability events (batch
+	// size, flush duration, success/failure). It is prometheus-free (the adapter
+	// lives in nexgo/metrics/chmetrics) and orthogonal to OnPermanentFailure:
+	// that callback routes failed rows to a dead-letter sink (business concern),
+	// whereas this hook only measures flush outcomes. Like OnPermanentFailure it
+	// carries no mapstructure tag — it is injected by code, not loaded from YAML —
+	// and must be non-blocking and panic-free. See WriterMetricsHook.
+	MetricsHook WriterMetricsHook `mapstructure:"-"`
 }
 
 func DefaultConfig() *Config {

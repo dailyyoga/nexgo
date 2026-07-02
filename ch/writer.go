@@ -277,6 +277,9 @@ func (w *defaultWriter) flush(buffer map[TableName][]Table) {
 	for table, rows := range buffer {
 		totalRows += len(rows)
 
+		// time the whole insert+retry attempt for this table so the metrics hook
+		// can report per-table flush duration and batch size.
+		start := time.Now()
 		var lastErr error
 		for attempt := 0; attempt <= maxRetries; attempt++ {
 			lastErr = w.batchInsert(context.Background(), table, rows)
@@ -298,6 +301,11 @@ func (w *defaultWriter) flush(buffer map[TableName][]Table) {
 			)
 			time.Sleep(backoff)
 		}
+
+		// Report this table's flush outcome to the optional metrics hook before the
+		// permanent-failure fallback. lastErr is nil on success, non-nil when the
+		// whole batch was permanently rejected.
+		w.reportFlush(table, len(rows), time.Since(start), lastErr)
 
 		if lastErr != nil {
 			w.logger.Error("batch insert failed",
@@ -346,6 +354,34 @@ func (w *defaultWriter) safeOnPermanentFailure(table TableName, rows []Table, er
 	}()
 
 	w.config.WriterConfig.OnPermanentFailure(table, rows, err)
+}
+
+// reportFlush hands one table's flush outcome to the optional WriterMetricsHook,
+// recovering from any panic so a misbehaving hook cannot stall or crash the
+// flush loop (same guarantee as safeOnPermanentFailure). It is a no-op when no
+// hook is configured, preserving the pre-feature behavior.
+func (w *defaultWriter) reportFlush(table TableName, rows int, duration time.Duration, err error) {
+	if w.config.WriterConfig.MetricsHook == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.Error("WriterMetricsHook.OnFlush panicked",
+				zap.String("table", string(table)),
+				zap.Int("rows", rows),
+				zap.Any("panic", r),
+			)
+		}
+	}()
+
+	w.config.WriterConfig.MetricsHook.OnFlush(table, rows, duration, err)
+}
+
+// BufferLen returns the number of rows currently queued in the ingress channel
+// awaiting the flush loop, across all tables. It implements WriterStats so a
+// scrape-time gauge can observe write backlog. Safe for concurrent use.
+func (w *defaultWriter) BufferLen() int {
+	return w.dataChan.Len()
 }
 
 // batchInsert batch insert data to clickhouse.
